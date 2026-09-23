@@ -88,8 +88,59 @@
 // joinery-schedule.json record now stamps a read-only `setBy` field with
 // whoever was signed in when Save was pressed. Does NOT touch source.html,
 // Install ITP, Manufacture ITP, Delivery ITP, or Projects in any way.)
+//
+// (v7, 2026-09-23: Andrew, verbatim: "scheduler status should have the
+// same tracking on hover like the attached photo from the projects app.
+// and delivery column should have scheduled delivery and actual delivery
+// dates." The Status column, in both the Overall and Project Schedule
+// tables, now hovers/taps open the exact same status-history popup as
+// UTZLINE Projects' own Joinery Register -- ported verbatim from that
+// app's own showStatusHistoryPop/joineryStatusHistoryFor. The former
+// "Required delivery" column is relabelled "Scheduled delivery" (same
+// field, unchanged), and a new "Actual delivery" column beside it shows
+// the item's own "delivered"-stage joinery-status.json history timestamp
+// once it's reached that stage. See index.html's own top-of-file comment
+// for the full design note.)
+//
+// (v8, 2026-09-23: Andrew, verbatim: "once an item is dispatched, the
+// delay column changes in the scheduler, (this could read Delivered
+// early / Delivered late / Delivered on time (on time would be 2 days
+// either side)." computeDelayInfo now takes the item's own actual
+// "delivered"-stage timestamp (added in v7's Actual delivery column) as a
+// 4th argument: once an item has genuinely reached "delivered" or later
+// AND has that real timestamp, the Delay column stops showing the
+// before-the-fact "Delivery overdue"/"On track" framing and instead
+// compares the real delivered date against the required delivery date --
+// "Delivered late" (more than 2 days after), "Delivered early" (more than
+// 2 days before), or "Delivered on time" (within that window, inclusive).
+// An item that reached "installed" without ever having a "delivered"
+// history entry (a real, if less common, path -- Delivery ITP's own
+// checklist is optional, not mandatory) still falls through to the
+// unchanged pre-existing rules. See index.html's own top-of-file comment
+// for the full design note.)
+//
+// (v9, 2026-09-23: Andrew, on the same status-history popup: "these status
+// windows to show days between each process." A gap marker now sits
+// between each pair of consecutive rows showing the elapsed time between
+// them -- "Same day" for anything under 1 day, "1 day" (singular) for
+// exactly one, otherwise "N days" -- ported verbatim from the identical
+// change made to UTZLINE Projects' own copy of this popup the same day. No
+// gap after the oldest (last) row, and none at all for an item with only
+// one history entry.)
+//
+// (v10, 2026-09-23: Andrew, verbatim: "Where there is a table it needs to
+// open the full width of the screen. To minimise scrolling." The Overall
+// Schedule and per-project Schedule screens now stretch to the full
+// viewport width instead of being capped to this app's usual 980px
+// centered content column -- a new .wide-table CSS class (max-width:none)
+// on just those two screens. Both tables already force a 900px min-width
+// (.sched-table) that the old 980px cap left little room for once main's
+// own side padding and the card's own padding were subtracted, so this
+// removes most of the forced horizontal scroll on ordinary desktop/tablet
+// viewports. The identical fix shipped to UTZLINE Projects' own Register/
+// Rework Register screens the same day.)
 var ICON_VERSION = "v1";
-var CACHE_NAME = "utzline-scheduler-cache-v5";
+var CACHE_NAME = "utzline-scheduler-cache-v10";
 
 var PRECACHE_URLS = [
   "./",

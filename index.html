@@ -72,13 +72,39 @@
     only -- no public-holiday calendar exists anywhere in this ecosystem,
     so a lead time that spans a holiday will be a little optimistic.
   - The plan viewer reads a Level's markers from its Floor Plans/<Level>.json
-    file. A LEGACY project that hasn't been opened once in Site Measure or
-    UTZLINE Projects since the 2026-09-22 "full flat structure" cutover
-    won't have that file yet -- its items still appear in both schedule
-    tables (joinery-items.json is unaffected), but "View on plan" /
-    right-click-to-schedule won't find a plan for it until it's opened
-    once in one of those apps. Since every active project has already been
-    through that cutover, this should not affect real usage today.
+    file, falling back to the legacy per-Level-folder shape
+    (<Level>/saves/<Level>.utzline.json) if the flat one doesn't exist or
+    has no image yet (added 2026-09-23, matching every ITP app's own
+    dual-path plan loader -- Andrew reported "floorplan does not load into
+    scheduler" and this flat-only assumption, which turned out to be wrong
+    in practice, was the cause). A genuinely brand-new project with no plan
+    saved anywhere yet still shows "No saved plan found for this level yet."
+  - Fixed the SAME day (2026-09-23), and just as important: the level-plan
+    picker's own list of levels (listExistingLevels) used to be built
+    purely from that flat Floor Plans directory too, via the old
+    listLevelFiles() -- so a fully legacy-shaped project (no "Project
+    Saves" folder at all, which describes most of Andrew's real,
+    not-yet-migrated projects) never even offered a level to pick in the
+    dropdown, meaning the flat/legacy fallback above never got a chance to
+    run. listExistingLevels now detects the project's shape once
+    (isFlatProject, same helper UTZLINE Projects and every ITP app already
+    use) and either reads the flat files' own `name` fields or lists the
+    project's own subfolders directly (excluding the same reserved
+    project-wide folders -- itp-install/itp-manufacture/itp-delivery/the
+    old "itp" name/"Project Saves" itself -- every sibling app already
+    excludes from its own level list, so none of them is ever mistaken for
+    an openable level).
+  - Andrew also separately reported markers rendering as unlabeled bare
+    dots: planRenderMarkers() used to only draw a label when a marker's own
+    saved label.text field was truthy, but this family's label-text
+    convention (roomlinkDisplayText, shared with Site Measure/Viewer/every
+    ITP app) computes the label fresh from joineryCode/roomName instead of
+    storing it -- so plenty of real markers had no stored label.text at
+    all. Fixed the same day: every roomlink marker's label is now always
+    computed via roomlinkDisplayText and rendered with a white halo behind
+    it for legibility over any plan image, matching Install ITP's own
+    buildPlanMarkerEl. A marker with hidden:true is still excluded from
+    rendering entirely, same as before.
   - Same (level, room, joineryId) collision caveat already documented
     against joinery-status.json elsewhere in this family: if two items
     ever collide on that exact triple, this app treats them as one, same
@@ -87,6 +113,40 @@
   Accent color is blue/teal (#1f8fbf) -- the one hue not already used by a
   sibling app (Site Measure/Viewer orange-red, Install ITP green,
   Manufacture ITP purple, Projects crimson).
+
+  STATUS-HISTORY HOVER POPUP + ACTUAL DELIVERY DATE (added 2026-09-23).
+  Andrew: "scheduler status should have the same tracking on hover like the
+  attached photo from the projects app. and delivery column should have
+  scheduled delivery and actual delivery dates." Both the Overall Schedule
+  and per-project Schedule tables' Status column now hovers/taps open the
+  exact same status-history popup as UTZLINE Projects' own Joinery Register
+  (joineryStatusHistoryFor/showStatusHistoryPop/hideStatusHistoryPop below
+  are a verbatim port of that app's own functions, reading this app's
+  already-loaded joinery-status.json list rather than re-fetching it). The
+  "Required delivery" column is relabelled "Scheduled delivery" (same field,
+  same sort key -- only the header text changed, to read correctly now that
+  it sits beside a new "Actual delivery" column), and that new column shows
+  the "delivered" stage's own history timestamp when the item's reached it
+  (blank em-dash otherwise, same as every other unset-date cell in this
+  table) -- read-only, straight from joinery-status.json, never computed or
+  stored by this app.
+
+  POST-DELIVERY DELAY OUTCOME (added 2026-09-23, same day as the above).
+  Andrew: "once an item is dispatched, the delay column changes in the
+  scheduler, (this could read Delivered early / Delivered late / Delivered
+  on time (on time would be 2 days either side)." computeDelayInfo now
+  takes the item's own actual "delivered"-stage timestamp as a 4th
+  argument: once an item has genuinely reached "delivered" or later status
+  AND has that real timestamp on record, the Delay column stops showing
+  the earlier before-the-fact framing ("Delivery overdue"/"On track") and
+  instead compares the real delivered date against the required delivery
+  date -- "Delivered late" (more than 2 days after), "Delivered early"
+  (more than 2 days before), or "Delivered on time" (within that 2-day
+  window either side, inclusive). An item that reached "installed" without
+  ever passing through a "delivered" history entry (a real path -- Andrew
+  can sign an item off in Install ITP even if Delivery ITP's own checklist
+  was skipped for it) has no actual delivered timestamp to compare, so it
+  still falls through to the unchanged pre-existing before-the-fact rules.
 -->
 <html lang="en">
 <head>
@@ -146,6 +206,15 @@
   .screen{ width: 100%; max-width: 980px; }
   .screen[hidden]{ display: none; }
   .screen.narrow{ max-width: 640px; }
+  /* Full-width table screens (2026-09-23): Andrew, verbatim -- "Where there
+     is a table it needs to open the full width of the screen. To minimise
+     scrolling." The Overall Schedule and per-project Schedule tables both
+     force a 900px min-width today (.sched-table) that this 980px .screen
+     cap leaves little room for once main's own side padding and the card's
+     own padding are subtracted -- full-width removes that squeeze on most
+     viewports. Same override pattern UTZLINE Projects' own Register/Rework
+     Register screens use. */
+  .screen.wide-table{ max-width: none; }
   h1{ font-size: 20px; margin: 0 0 6px; }
   p.sub{ color: var(--muted); margin: 0 0 20px; font-size: 14px; line-height: 1.5; }
   .card{
@@ -305,7 +374,40 @@
   .delay-ontrack{ background: rgba(51,196,106,0.16); color: var(--ok); }
   .delay-start{ background: rgba(224,161,44,0.18); color: var(--warn); }
   .delay-delivery{ background: rgba(255,93,93,0.18); color: var(--danger); }
+  /* ---- Post-delivery outcome pills (2026-09-23) -- "once an item is
+       dispatched, the delay column changes... Delivered early / Delivered
+       late / Delivered on time". Early and on-time both read as good-news
+       green (Andrew only asked to distinguish them from "late", not from
+       each other); late reuses the same danger red as "Delivery overdue"
+       since both mean the same real-world outcome (missed the date). ---- */
+  .delay-ontime{ background: rgba(51,196,106,0.16); color: var(--ok); }
+  .delay-early{ background: rgba(51,196,106,0.16); color: var(--ok); }
+  .delay-late{ background: rgba(255,93,93,0.18); color: var(--danger); }
   .row-actions{ display: flex; gap: 6px; }
+
+  /* ---- Status-history hover popup (2026-09-23, ported from UTZLINE
+       Projects' Joinery Register -- see index.html there for the original.
+       Andrew: "scheduler status should have the same tracking on hover
+       like the attached photo from the projects app." Same markup/classes,
+       so this app's own popup looks and behaves identically. ---- */
+  .status-cell{ cursor: pointer; }
+  .status-history-pop{
+    position: fixed; z-index: 60; max-width: 300px;
+    background: #101a1f; border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 12px; font-size: 12px; color: var(--text);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4); pointer-events: none;
+    white-space: normal;
+  }
+  .status-history-pop .shp-title{ font-weight: 700; margin-bottom: 6px; }
+  .status-history-pop .shp-row{ display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-top: 1px solid var(--border); }
+  .status-history-pop .shp-row:first-of-type{ border-top: none; }
+  .status-history-pop .shp-status{ font-weight: 600; }
+  .status-history-pop .shp-meta{ color: var(--muted); text-align: right; white-space: nowrap; }
+  .status-history-pop .shp-empty{ color: var(--muted); }
+  /* Elapsed time between two consecutive history rows (added 2026-09-23,
+     Andrew: "these status windows to show days between each process") --
+     same styling as UTZLINE Projects' own port of this same popup. */
+  .status-history-pop .shp-gap{ color: var(--muted2); font-size: 11px; font-style: italic; text-align: center; padding: 2px 0; }
 
   /* plan canvas (read-only) -- fixed to escape main's centered/max-width layout */
   .plan-canvas-screen{
@@ -432,7 +534,7 @@
   </section>
 
   <!-- ---- Overall Schedule (cross-project) ---- -->
-  <section id="screenOverall" class="screen">
+  <section id="screenOverall" class="screen wide-table">
     <div class="row backrow">
       <button class="btn secondary sm" id="backFromOverallBtn">&larr; Home</button>
       <h1 style="margin:0;">Overall Schedule</h1>
@@ -453,6 +555,9 @@
         <option value="delivery">Delivery overdue</option>
         <option value="start">Manufacture start overdue</option>
         <option value="ontrack">On track</option>
+        <option value="late">Delivered late</option>
+        <option value="ontime">Delivered on time</option>
+        <option value="early">Delivered early</option>
         <option value="none">No schedule set</option>
       </select>
       <input type="text" id="overallSearchInput" placeholder="Search ID, description, or work order #">
@@ -471,7 +576,8 @@
             <th data-col="joineryId">Joinery ID</th>
             <th data-col="description">Description</th>
             <th data-col="workOrderNo">Work order #</th>
-            <th data-col="requiredDeliveryDate">Required delivery</th>
+            <th data-col="requiredDeliveryDate">Scheduled delivery</th>
+            <th data-col="actualDeliveredAt">Actual delivery</th>
             <th data-col="manufactureStartDate">Manufacture start</th>
             <th data-col="leadTime">Lead time</th>
             <th data-col="status">Status</th>
@@ -487,7 +593,7 @@
   </section>
 
   <!-- ---- Per-project Schedule ---- -->
-  <section id="screenProjectSchedule" class="screen">
+  <section id="screenProjectSchedule" class="screen wide-table">
     <div class="row backrow">
       <button class="btn secondary sm" id="backFromProjectScheduleBtn">&larr; Home</button>
       <h1 id="projectScheduleTitle" style="margin:0;">Project</h1>
@@ -514,6 +620,9 @@
         <option value="delivery">Delivery overdue</option>
         <option value="start">Manufacture start overdue</option>
         <option value="ontrack">On track</option>
+        <option value="late">Delivered late</option>
+        <option value="ontime">Delivered on time</option>
+        <option value="early">Delivered early</option>
         <option value="none">No schedule set</option>
       </select>
       <input type="text" id="projSearchInput" placeholder="Search ID, description, or work order #">
@@ -527,7 +636,8 @@
             <th data-col="joineryId">Joinery ID</th>
             <th data-col="description">Description</th>
             <th data-col="workOrderNo">Work order #</th>
-            <th data-col="requiredDeliveryDate">Required delivery</th>
+            <th data-col="requiredDeliveryDate">Scheduled delivery</th>
+            <th data-col="actualDeliveredAt">Actual delivery</th>
             <th data-col="manufactureStartDate">Manufacture start</th>
             <th data-col="leadTime">Lead time</th>
             <th data-col="status">Status</th>
@@ -541,6 +651,14 @@
       <div class="empty-note" id="projEmptyAll" hidden>No joinery items in this project yet.</div>
     </div>
   </section>
+
+  <!-- ---- Status-history hover popup (2026-09-23): "if you hover over a
+       joinery item on this page, it gives you a list of all the status
+       changes for that joinery item, dates and who changed it" -- ported
+       verbatim (markup + behavior) from UTZLINE Projects' own Joinery
+       Register. See index.html's own status-cell wiring, in wireRowActions
+       below, for how it's shown/hidden. ---- -->
+  <div class="status-history-pop" id="statusHistoryPop" hidden></div>
 
   <div id="toast"></div>
 
@@ -948,10 +1066,8 @@
     return sanitizeFileBase(projectName) + " - " + sanitizeFileBase(levelName) + ".json";
   }
   // Read-only: this app never creates "Project Saves/Floor Plans/" itself
-  // (create:false throughout) -- a project with no plans saved yet, or a
-  // legacy project not yet migrated by Site Measure/Projects, just reads
-  // as having no levels here (a disclosed limitation -- see top-of-file
-  // comment).
+  // (create:false throughout) -- a flat project with no plan saved for this
+  // particular level yet resolves null here, same as before.
   function readLevelFileByName(projectHandle, fname){
     return getFloorPlansDir(projectHandle).then(function(dirH){
       return dirH.getFileHandle(fname);
@@ -974,11 +1090,65 @@
       }catch(e){ return null; }
     }, function(){ return null; });
   }
+  // Legacy per-Level-folder plan reader (2026-09-23) -- Andrew, verbatim:
+  // "scheduler doesnt utilise the viewer properly. floor plan in not
+  // usable. copy the viewer platform we use in the itps for floor plans."
+  // Investigated: this app's own plan lookup only ever tried the new flat
+  // "Project Saves/Floor Plans/" shape -- unlike every ITP app (and Site
+  // Measure/Projects themselves), which fall back to the OLD per-Level-
+  // folder shape ("<project>/<Level>/saves/<Level>.utzline.json") for a
+  // project that hasn't been touched by Site Measure/Projects since the
+  // flat-structure cutover. That's almost certainly why "floorplan does
+  // not load into scheduler" was reported right before this -- most real
+  // projects are still legacy-shaped. Mirrors Install ITP's own
+  // loadLevelPlan()/levelSaveFilename() byte-for-byte in shape (not a
+  // shared module -- this app has no way to import one -- but deliberately
+  // kept in sync with that file's naming/schema so a file either app reads
+  // is read back identically).
+  function legacyLevelSaveFilename(levelName){ return sanitizeFileBase(levelName) + ".utzline.json"; }
+  function readLegacyLevelFile(projectHandle, levelName){
+    if (!projectHandle) return Promise.resolve(null);
+    return projectHandle.getDirectoryHandle(levelName, { create: false }).then(function(levelH){
+      return levelH.getDirectoryHandle("saves", { create: false });
+    }).then(function(savesH){
+      return savesH.getFileHandle(legacyLevelSaveFilename(levelName), { create: false });
+    }).then(function(fh){
+      return fh.getFile();
+    }).then(function(file){
+      return file.text();
+    }).then(function(text){
+      var parsed = null;
+      try{ parsed = JSON.parse(text); }catch(e){ parsed = null; }
+      if (!parsed || typeof parsed !== "object") return null;
+      return {
+        name: levelName,
+        imageDataURL: parsed.imageDataURL || null,
+        imageTiles: parsed.imageTiles || null,
+        imageW: parsed.imageW || 0,
+        imageH: parsed.imageH || 0,
+        markers: Array.isArray(parsed.objects) ? parsed.objects : []
+      };
+    }, function(){ return null; });
+  }
+  // Tries the flat shape first (the common case for anything touched by
+  // Site Measure/Projects since the cutover), then falls back to the
+  // legacy per-Level-folder shape -- exactly the dual-path approach every
+  // ITP app already uses. Whichever shape actually has a real image wins;
+  // a flat record with no image (an empty placeholder) still falls through
+  // to a legacy file if one exists, rather than reporting "no plan" when
+  // one is genuinely there.
   function readLevelFile(projectHandle, projectName, levelName){
     if (!projectHandle) return Promise.resolve(null);
-    return readLevelFileByName(projectHandle, levelFileName(projectName, levelName));
+    return readLevelFileByName(projectHandle, levelFileName(projectName, levelName)).then(function(flatLevel){
+      if (flatLevel && flatLevel.imageW > 0 && flatLevel.imageH > 0 && (flatLevel.imageDataURL || (flatLevel.imageTiles && flatLevel.imageTiles.length))){
+        return flatLevel;
+      }
+      return readLegacyLevelFile(projectHandle, levelName).then(function(legacyLevel){
+        return legacyLevel || flatLevel; // prefer a real legacy plan; otherwise keep whatever the flat read gave (even if plan-less), same as before
+      });
+    });
   }
-  function listLevelFiles(projectHandle){
+  function listFlatLevelNames(projectHandle){
     return getFloorPlansDir(projectHandle).then(function(dirH){
       var fnames = [];
       var iter = dirH.values();
@@ -994,16 +1164,39 @@
       return fnames.reduce(function(chain, fname){
         return chain.then(function(acc){
           return readLevelFileByName(projectHandle, fname).then(function(level){
-            if (level) acc.push(level);
+            if (level) acc.push(level.name);
             return acc;
           });
         });
       }, Promise.resolve([]));
+    }).then(function(names){
+      return names.sort(function(a, b){ return a.localeCompare(b, undefined, { sensitivity: "base" }); });
     });
   }
+  function isFlatProject(projectHandle){
+    if (!projectHandle) return Promise.resolve(false);
+    return getFloorPlansDir(projectHandle).then(function(){ return true; }, function(){ return false; });
+  }
+  // Rewritten 2026-09-23 alongside readLevelFile's own legacy fallback --
+  // this was the REAL reason the fallback never kicked in for a fully
+  // legacy-shaped project (no "Project Saves" folder at all): the level
+  // dropdown itself was only ever populated from the flat "Floor Plans"
+  // directory listing, via the old listLevelFiles(), so a legacy project
+  // never even offered its levels to pick from in the first place -- readLevelFile's
+  // fallback had no level name to be given. Mirrors UTZLINE Projects'
+  // source.html / Install ITP's own listExistingLevels() byte-for-byte in
+  // shape: detect the shape ONCE (isFlatProject), then either read the
+  // flat Floor Plans files (their own `name` field) or list this project's
+  // own subfolders directly (excluding the same reserved project-wide
+  // folders every other app in the family already excludes, so an ITP
+  // app's own working folder is never mistaken for a level someone could
+  // open a plan for).
   function listExistingLevels(projectHandle){
-    return listLevelFiles(projectHandle).then(function(levels){
-      return levels.map(function(l){ return l.name; }).sort(function(a, b){ return a.localeCompare(b, undefined, { sensitivity: "base" }); });
+    return isFlatProject(projectHandle).then(function(flat){
+      if (flat) return listFlatLevelNames(projectHandle);
+      return listSubdirNames(projectHandle).then(function(names){
+        return names.filter(function(n){ return n !== "itp" && n !== "itp-install" && n !== "itp-manufacture" && n !== "itp-delivery" && n !== projectSavesDirName(); });
+      });
     });
   }
 
@@ -1164,6 +1357,20 @@
     }catch(e){ return dateStr; }
   }
 
+  // Whole calendar days between two "YYYY-MM-DD" (or a full ISO
+  // timestamp's own date portion) strings, aStr minus bStr -- both walked
+  // as plain UTC calendar dates, same convention as subtractBusinessDays/
+  // isWeekendUTC elsewhere in this file (a "delivered" history timestamp
+  // is a real UTC moment; slicing its own date portion off before calling
+  // this keeps every date comparison in this app on the same UTC-calendar
+  // footing rather than mixing in a moment-in-time comparison).
+  function daysBetweenDateStrs(aStr, bStr){
+    var da = new Date((aStr || "").slice(0, 10) + "T00:00:00Z");
+    var db = new Date((bStr || "").slice(0, 10) + "T00:00:00Z");
+    if (isNaN(da.getTime()) || isNaN(db.getTime())) return 0;
+    return Math.round((da.getTime() - db.getTime()) / 86400000);
+  }
+
   /* ============================== delay flagging (disclosed design call) ==============================
      Andrew asked only that the app "flags any delays" -- the exact rule
      wasn't specified, so this is Claude's own design call, disclosed here
@@ -1176,12 +1383,44 @@
                 "installed" is treated as the real completion marker)
        - else today > manufactureStartDate AND status not yet
              "in_manufacture" or later -> "Manufacture start overdue"
-       - else -> "On track" */
-  function computeDelayInfo(scheduleRec, statusKey, todayStr){
+       - else -> "On track"
+
+     UPDATED 2026-09-23, Andrew, verbatim: "once an item is dispatched, the
+     delay column changes in the scheduler, (this could read Delivered
+     early / Delivered late / Delivered on time (on time would be 2 days
+     either side)." Once an item's actually reached "delivered" (or later)
+     AND has its own "delivered"-stage history timestamp (added this same
+     round -- see actualDeliveredAt in buildEnrichedRows), the "before the
+     fact" flags above no longer apply -- the outcome is already known, so
+     this compares the real delivered date against the required delivery
+     date instead of comparing "today" against anything:
+       - actual delivered date more than 2 days AFTER the required date
+             -> "Delivered late"
+       - actual delivered date more than 2 days BEFORE the required date
+             -> "Delivered early"
+       - within that +/-2 day window (inclusive)
+             -> "Delivered on time"
+     A record can reach "installed" (rank 5) without ever having a
+     "delivered" history entry at all -- the forward-only pipeline allows
+     jumping straight from an earlier stage to "installed" if Delivery
+     ITP's own checklist was never used for that item -- so this only takes
+     the new early/late/on-time path when an actual delivered timestamp
+     genuinely exists; otherwise it falls through to the pre-existing
+     before-the-fact rules unchanged (which is why a fully "installed" item
+     with no delivered timestamp still reads via the old rules, same as
+     before this round -- rank 5 already always passes the old
+     "delivery overdue" check regardless). */
+  function computeDelayInfo(scheduleRec, statusKey, todayStr, actualDeliveredAt){
     if (!scheduleRec || !scheduleRec.requiredDeliveryDate){
       return { key: "none", label: "No schedule set", severity: 0 };
     }
     var rank = joineryStatusRank(statusKey);
+    if (rank >= 4 && actualDeliveredAt){
+      var diffDays = daysBetweenDateStrs(actualDeliveredAt, scheduleRec.requiredDeliveryDate); // actual - required
+      if (diffDays > 2) return { key: "late", label: "Delivered late", severity: 3 };
+      if (diffDays < -2) return { key: "early", label: "Delivered early", severity: 0 };
+      return { key: "ontime", label: "Delivered on time", severity: 0 };
+    }
     if (todayStr > scheduleRec.requiredDeliveryDate && rank < 5){
       return { key: "delivery", label: "Delivery overdue", severity: 3 };
     }
@@ -1190,6 +1429,80 @@
     }
     return { key: "ontrack", label: "On track", severity: 1 };
   }
+
+  /* ============================== Status-history hover popup (2026-09-23) ==============================
+     Andrew: "scheduler status should have the same tracking on hover like
+     the attached photo from the projects app." Ported verbatim from UTZLINE
+     Projects' own Joinery Register (joineryStatusHistoryFor/
+     formatHistoryDate/showStatusHistoryPop/hideStatusHistoryPop there) --
+     same markup/classes/behavior, just reading this app's already-loaded
+     statusList instead of re-fetching it. A record that's never reached
+     "measured" or beyond has no joinery-status.json entry at all -- reads
+     as an empty list ("No status changes yet."), not an error. Opens on
+     both hover (mouse) and tap/click (touch, which has no hover), exactly
+     like Projects' own popup, and is a look-only overlay closed by moving
+     away or tapping elsewhere. */
+  function joineryStatusHistoryFor(statusList, level, room, joineryId){
+    var rec = findJoineryStatus(statusList, level, room, joineryId);
+    var hist = (rec && Array.isArray(rec.history)) ? rec.history.slice() : [];
+    hist.sort(function(a, b){ return (b.at || "").localeCompare(a.at || ""); });
+    return hist;
+  }
+  function formatHistoryDate(iso){
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return iso || "";
+    return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) + " " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  }
+  // Short, date-only rendering of the same ISO timestamps, for the Actual
+  // delivery column (which sits beside Scheduled delivery's own
+  // formatDateDisplay date-only cell -- the history popup above is the
+  // place to see the exact time and who changed it).
+  function formatHistoryDateOnly(iso){
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return iso || "";
+    return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  }
+  // Elapsed time between two history entries (added 2026-09-23, Andrew:
+  // "these status windows to show days between each process") -- ported
+  // verbatim from UTZLINE Projects' own formatDaysBetween. Distinct from
+  // this file's own daysBetweenDateStrs (used for the Delay column's
+  // early/late/on-time math, which deliberately works on plain calendar
+  // dates) -- this one is millisecond-precision against the real history
+  // timestamps, since a "days between" figure in a popup showing exact
+  // times should reflect the exact times. newerIso is always the same
+  // moment or later than olderIso, since hist is always sorted
+  // newest-first before this is called.
+  function formatDaysBetween(newerIso, olderIso){
+    var a = new Date(newerIso), b = new Date(olderIso);
+    if (isNaN(a.getTime()) || isNaN(b.getTime())) return "";
+    var days = Math.round((a.getTime() - b.getTime()) / 86400000);
+    if (days <= 0) return "Same day";
+    return days === 1 ? "1 day" : days + " days";
+  }
+  var statusHistoryPop = document.getElementById("statusHistoryPop");
+  function hideStatusHistoryPop(){ statusHistoryPop.hidden = true; }
+  function showStatusHistoryPop(cellEl, row){
+    var hist = row.statusHistory || [];
+    var rows = hist.length
+      ? hist.map(function(h, i){
+          var rowHtml = "<div class=\"shp-row\"><span class=\"shp-status\">" + statusLabelHtml(h.status) + "</span><span class=\"shp-meta\">" + escapeHtml(formatHistoryDate(h.at)) + (h.by ? "<br>" + escapeHtml(h.by) : "") + "</span></div>";
+          var gapHtml = (i < hist.length - 1) ? "<div class=\"shp-gap\">" + escapeHtml(formatDaysBetween(h.at, hist[i + 1].at)) + "</div>" : "";
+          return rowHtml + gapHtml;
+        }).join("")
+      : "<div class=\"shp-empty\">No status changes yet.</div>";
+    statusHistoryPop.innerHTML = "<div class=\"shp-title\">" + escapeHtml(row.joineryId || "(no ID)") + "</div>" + rows;
+    statusHistoryPop.hidden = false;
+    var r = cellEl.getBoundingClientRect();
+    var top = r.bottom + 6, left = r.left;
+    var popRect = statusHistoryPop.getBoundingClientRect();
+    if (top + popRect.height > window.innerHeight) top = Math.max(6, r.top - popRect.height - 6);
+    if (left + popRect.width > window.innerWidth) left = Math.max(6, window.innerWidth - popRect.width - 6);
+    statusHistoryPop.style.top = top + "px";
+    statusHistoryPop.style.left = left + "px";
+  }
+  document.addEventListener("click", function(e){
+    if (!statusHistoryPop.hidden && !e.target.closest(".status-cell")) hideStatusHistoryPop();
+  });
 
   /* ============================== roomlink markers / plan viewer (read-only) ==============================
      Rendering/hit-testing logic copied verbatim from UTZLINE Projects' own
@@ -1285,31 +1598,58 @@
       planCanvasTilesG.appendChild(img2);
     }
   }
+  // Rewritten 2026-09-23 to match Install ITP's own marker rendering (see
+  // that app's buildPlanMarkerEl) -- Andrew: "copy the viewer platform we
+  // use in the itps for floor plans." Two real bugs fixed here:
+  //   1) A label only ever rendered when the marker's OWN saved
+  //      obj.label.text was truthy -- but this app (like every ITP app)
+  //      computes the display text fresh from obj.joineryCode/obj.roomName
+  //      via roomlinkDisplayText(), which several real markers may not have
+  //      a matching stored label.text for (especially after the family-wide
+  //      "label shows only the joinery code" change). That silently drew a
+  //      bare, unlabeled dot -- useless for telling items apart on a
+  //      schedule. Now a label always renders, exactly like every ITP app.
+  //   2) No fallback label position when obj.label itself is missing --
+  //      now falls back to just below the marker (obj.y + r + 22), same as
+  //      ITP's own buildPlanMarkerEl.
+  // Also added: a white halo behind the dot (same as ITP) so a marker stays
+  // visible against a light/busy part of the plan image, and a white text
+  // stroke instead of the previous dark one for the same reason.
   function planRenderMarkers(){
     while (planCanvasMarkersG.firstChild) planCanvasMarkersG.removeChild(planCanvasMarkersG.firstChild);
     if (!planSaved || !planSaved.objects) return;
     planSaved.objects.forEach(function(obj){
       if (obj.type !== "roomlink") return;
+      var r = (obj.r > 0) ? obj.r : 20;
+
+      var halo = document.createElementNS(SVG_NS, "circle");
+      halo.setAttribute("cx", obj.x); halo.setAttribute("cy", obj.y); halo.setAttribute("r", r + 3);
+      halo.setAttribute("fill", "#fff"); halo.setAttribute("opacity", "0.85");
+      planCanvasMarkersG.appendChild(halo);
+
       var dot = document.createElementNS(SVG_NS, "circle");
       dot.setAttribute("class", "marker-dot");
-      dot.setAttribute("cx", obj.x); dot.setAttribute("cy", obj.y); dot.setAttribute("r", obj.r);
+      dot.setAttribute("cx", obj.x); dot.setAttribute("cy", obj.y); dot.setAttribute("r", r);
       dot.setAttribute("fill", obj.color || "#1f8fbf");
-      dot.setAttribute("stroke", "#fff"); dot.setAttribute("stroke-width", Math.max(1, obj.r * 0.08));
+      dot.setAttribute("stroke", "#fff"); dot.setAttribute("stroke-width", Math.max(1, r * 0.08));
       dot.setAttribute("data-marker-id", obj.id);
       planCanvasMarkersG.appendChild(dot);
-      if (obj.label && obj.label.text){
-        var text = document.createElementNS(SVG_NS, "text");
-        text.setAttribute("class", "marker-label");
-        text.setAttribute("x", obj.label.x); text.setAttribute("y", obj.label.y);
-        text.setAttribute("text-anchor", obj.label.anchor || "middle");
-        text.setAttribute("fill", obj.label.color || "#fff");
-        text.setAttribute("font-size", obj.label.fontSize || 32);
-        text.setAttribute("paint-order", "stroke");
-        text.setAttribute("stroke", "#0b0707");
-        text.setAttribute("stroke-width", "4");
-        text.textContent = roomlinkDisplayText(obj);
-        planCanvasMarkersG.appendChild(text);
-      }
+
+      var labelX = (obj.label && typeof obj.label.x === "number") ? obj.label.x : obj.x;
+      var labelY = (obj.label && typeof obj.label.y === "number") ? obj.label.y : (obj.y + r + 22);
+      var labelFontSize = (obj.label && obj.label.fontSize) ? obj.label.fontSize : 22;
+      var text = document.createElementNS(SVG_NS, "text");
+      text.setAttribute("class", "marker-label");
+      text.setAttribute("x", labelX); text.setAttribute("y", labelY);
+      text.setAttribute("text-anchor", (obj.label && obj.label.anchor) || "middle");
+      text.setAttribute("font-size", labelFontSize);
+      text.setAttribute("font-weight", "700");
+      text.setAttribute("fill", "#1b2422");
+      text.setAttribute("paint-order", "stroke fill");
+      text.setAttribute("stroke", "#fff");
+      text.setAttribute("stroke-width", Math.max(2, Math.round(labelFontSize * 0.18)));
+      text.textContent = roomlinkDisplayText(obj);
+      planCanvasMarkersG.appendChild(text);
     });
   }
   function planMarkerAt(worldX, worldY){
@@ -1470,7 +1810,13 @@
     planCanvasTitle.textContent = projectName + " — " + levelName;
     planCanvasScreen.hidden = false;
     return readLevelFile(projectHandle, projectName, levelName).then(function(level){
-      var markers = level ? level.markers || [] : [];
+      // Same roomlink filter every ITP app already applies (type==="roomlink",
+      // not hidden, a real roomName) -- this app's own reader used to pass
+      // every saved object straight through unfiltered, so a hidden marker
+      // or a stray non-roomlink object could still render/be tappable here.
+      var markers = level ? (level.markers || []).filter(function(o){
+        return o && o.type === "roomlink" && !o.hidden && typeof o.roomName === "string" && o.roomName;
+      }) : [];
       planSaved = {
         imageDataURL: level ? level.imageDataURL : null,
         imageTiles: level ? level.imageTiles : null,
@@ -1910,7 +2256,21 @@
     return items.map(function(item){
       var statusKey = (findJoineryStatus(statusList, item.level, item.room, item.joineryId) || {}).status || "";
       var schedRec = findScheduleRecord(scheduleList, item.level, item.room, item.joineryId);
-      var delay = computeDelayInfo(schedRec, statusKey, today);
+      var statusHistory = joineryStatusHistoryFor(statusList, item.level, item.room, item.joineryId);
+      // The "delivered" stage's own history entry, if the item's ever
+      // reached it -- Andrew: "delivery column should have scheduled
+      // delivery and actual delivery dates." Forward-only pipeline never
+      // demotes and never re-fires the same stage twice, so there's at
+      // most one "delivered" entry to find; still take the newest match
+      // defensively rather than assuming array position.
+      var actualDeliveredAt = "";
+      for (var i = 0; i < statusHistory.length; i++){
+        if (statusHistory[i].status === "delivered"){ actualDeliveredAt = statusHistory[i].at; break; } // sorted newest-first already
+      }
+      // computeDelayInfo needs actualDeliveredAt (see its own comment) to
+      // decide whether the item's already been delivered and should show
+      // an early/late/on-time outcome instead of a before-the-fact flag.
+      var delay = computeDelayInfo(schedRec, statusKey, today, actualDeliveredAt);
       return {
         project: projectName,
         projectHandle: projectHandle,
@@ -1920,7 +2280,9 @@
         description: item.description,
         workOrderNo: item.workOrderNo,
         statusKey: statusKey,
+        statusHistory: statusHistory,
         requiredDeliveryDate: schedRec ? schedRec.requiredDeliveryDate : "",
+        actualDeliveredAt: actualDeliveredAt,
         manufactureLeadTimeDays: schedRec ? schedRec.manufactureLeadTimeDays : null,
         manufactureStartDate: schedRec ? schedRec.manufactureStartDate : "",
         delayKey: delay.key,
@@ -1933,7 +2295,7 @@
   function scheduleCompare(a, b, sort){
     var col = sort.col;
     var cmp;
-    if (col === "requiredDeliveryDate" || col === "manufactureStartDate"){
+    if (col === "requiredDeliveryDate" || col === "manufactureStartDate" || col === "actualDeliveredAt"){
       var av = a[col] || "", bv = b[col] || "";
       if (!av && !bv) cmp = 0;
       else if (!av) return 1;   // unset always sorts last, regardless of direction
@@ -1965,6 +2327,7 @@
       "<td class=\"wrap\">" + escapeHtml(row.description) + "</td>" +
       "<td>" + (row.workOrderNo ? escapeHtml(row.workOrderNo) : "<span class=\"muted-cell\">—</span>") + "</td>" +
       "<td>" + (row.requiredDeliveryDate ? escapeHtml(formatDateDisplay(row.requiredDeliveryDate)) : "<span class=\"muted-cell\">—</span>") + "</td>" +
+      "<td>" + (row.actualDeliveredAt ? escapeHtml(formatHistoryDateOnly(row.actualDeliveredAt)) : "<span class=\"muted-cell\">—</span>") + "</td>" +
       "<td>" + (row.manufactureStartDate ? escapeHtml(formatDateDisplay(row.manufactureStartDate)) : "<span class=\"muted-cell\">—</span>") + "</td>" +
       "<td>" + (row.manufactureLeadTimeDays != null ? row.manufactureLeadTimeDays + "d" : "<span class=\"muted-cell\">—</span>") + "</td>" +
       "<td class=\"status-cell\">" + statusLabelHtml(row.statusKey) + "</td>" +
@@ -1982,6 +2345,19 @@
         if (returnScreen === "overall") loadOverallSchedule(); else loadProjectSchedule(row.projectHandle, row.project);
       });
     });
+    // Status-history hover/tap popup (2026-09-23) -- see showStatusHistoryPop
+    // above. Hover opens/closes it on desktop; a plain click/tap toggles it,
+    // since touch devices have no hover event at all -- same dual handling
+    // as UTZLINE Projects' own Joinery Register.
+    var statusCell = tr.querySelector(".status-cell");
+    if (statusCell){
+      statusCell.addEventListener("mouseenter", function(){ showStatusHistoryPop(statusCell, row); });
+      statusCell.addEventListener("mouseleave", hideStatusHistoryPop);
+      statusCell.addEventListener("click", function(e){
+        e.stopPropagation();
+        if (statusHistoryPop.hidden) showStatusHistoryPop(statusCell, row); else hideStatusHistoryPop();
+      });
+    }
   }
 
   /* ============================== Overall Schedule screen ============================== */
@@ -2183,6 +2559,7 @@
   };
   function showScreen(name){
     Object.keys(screens).forEach(function(k){ screens[k].hidden = (k !== name); });
+    hideStatusHistoryPop(); // never leak the popup across a screen change (e.g. "View on plan")
   }
 
   var projectsRootHandle = null, projectsRootName = "";

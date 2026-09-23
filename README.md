@@ -1,6 +1,27 @@
 # UTZLINE Scheduler — installable app
 
-**Current version: v5** (its own independent version line, separate from every other app in the family — bump this line, and add a dated entry below, every time a new build ships.)
+**Current version: v10** (its own independent version line, separate from every other app in the family — bump this line, and add a dated entry below, every time a new build ships.)
+
+**v10 (2026-09-23):** Andrew, verbatim: *"Where there is a table it needs to open the full width of the screen. To minimise scrolling."* The Overall Schedule and per-project Schedule screens now stretch to the full viewport width instead of being capped to this app's usual 980px centered content column — a new `.wide-table` CSS class (`max-width: none`) applied to just those two screens. Both tables already force a 900px `min-width` (`.sched-table`) that left little room once the old 980px screen cap, `main`'s own side padding, and the card's own padding were all subtracted — this removes most of the forced horizontal scroll on ordinary desktop/tablet viewports. `service-worker.js` cache bumped to `utzline-scheduler-cache-v10`. Full 9-file suite re-run clean. The identical fix shipped to UTZLINE Projects' own Joinery Register and Rework Register screens the same day — see that app's own README.
+
+**v9 (2026-09-23):** Andrew, on the same status-history popup added in v7: *"these status windows to show days between each process."* A gap marker now sits between each pair of consecutive history rows in the popup, showing the elapsed time between them — "Same day" for under a day, "1 day" (singular) for exactly one, otherwise "N days" — ported verbatim from the identical change made to UTZLINE Projects' own copy of this same popup the same day. No gap appears after the oldest (last) row, and an item with only one history entry shows that row with no gap marker at all.
+
+New regression test `run_status_history_gaps.js` covers three exact, hand-picked gaps (6 hours → "Same day", 8 days exactly, 1 day exactly), confirms a single-entry item shows no gap, and confirms the same gap markers render correctly from the Overall Schedule table too. Full suite re-run clean afterward: 9/9 passing, zero regressions.
+
+**v8 (2026-09-23):** Andrew, verbatim: *"once an item is dispatched, the delay column changes in the scheduler, (this could read Delivered early / Delivered late / Delivered on time (on time would be 2 days either side)."* `computeDelayInfo()` now takes the item's own actual `"delivered"`-stage timestamp (the same one v7's new Actual delivery column already shows) as a 4th argument. Once an item has genuinely reached "Delivered" or later status **and** has that real timestamp on record, the Delay column stops showing the earlier before-the-fact framing ("Delivery overdue" / "On track") and instead compares the real delivered date against the required delivery date: **Delivered late** (more than 2 days after), **Delivered early** (more than 2 days before), or **Delivered on time** (within that 2-day window either side, inclusive on both edges). An item that reached "Installed" without ever passing through a real "delivered" history entry — a genuine path, since signing off in Install ITP doesn't require Delivery ITP's own checklist to have been used first — has no actual delivered timestamp to compare, so it still falls through to the unchanged pre-existing rules. Every other delay scenario (not yet delivered at all) is completely unaffected by this round.
+
+New regression test `run_post_delivery_delay_outcome.js` covers every boundary of the new rule directly against `computeDelayInfo()` (exactly on the required date, exactly 2 days either side — still "on time" since the window is inclusive — and 3 days either side, which tips into late/early), confirms "installed" with a real delivered timestamp gets the same treatment as "delivered" itself, confirms "installed" with **no** delivered timestamp correctly falls back to the old rules, and confirms the pre-delivery scenarios are untouched — then checks the same thing end to end through the real rendered Delay column and pill class in the Project Schedule table from a seeded `joinery-status.json` history. Full suite re-run clean afterward: 8/8 passing, zero regressions.
+
+**v7 (2026-09-23):** Andrew, verbatim: *"scheduler status should have the same tracking on hover like the attached photo from the projects app. and delivery column should have scheduled delivery and actual delivery dates."* Both the Overall Schedule and Project Schedule tables' **Status** column now opens the exact same status-history popup as UTZLINE Projects' own Joinery Register — hover on desktop, tap to toggle on touch (no hover event there) — listing every `joinery-status.json` history entry newest-first, each with its icon/label, formatted date and time, and who made the change. `joineryStatusHistoryFor`/`showStatusHistoryPop`/`hideStatusHistoryPop` are a verbatim port of Projects' own functions (same markup/CSS classes), just reading this app's already-loaded status list instead of re-fetching it — this app is still strictly read-only against `joinery-status.json`, same as always. The **Required delivery** column is relabelled **Scheduled delivery** (same field, same sort key, only the header text changed — it needed to read correctly once a second delivery-related column sits beside it), and a new **Actual delivery** column shows the item's own `"delivered"`-stage history timestamp once it's reached that stage (an em dash otherwise, same convention as every other unset-date cell in this table). Purely a display change — Scheduler still writes nothing but its own `joinery-schedule.json`.
+
+New regression test `run_status_history_and_actual_delivery.js` covers: the renamed/added column headers and cell values; hovering a fully-historied item's status cell shows all four history rows in the right order with the right icon/date/attribution; an item with no `joinery-status.json` record at all shows the popup's empty state rather than erroring; a click/tap toggles the popup open and closed; clicking elsewhere on the page closes it; navigating away (e.g. back to Home) closes it rather than leaving it stuck on screen; and the same popup also works from the Overall Schedule table. Full suite re-run clean afterward: 7/7 passing, zero regressions (two pre-existing tests' hardcoded `<td>` column indices were updated for the new column — `run_schedule_crud_and_delay.js` and `run_overall_and_plan_view.js` — since their row layout, not their behavior, shifted).
+
+**v6 (2026-09-23):** Andrew, verbatim: *"scheduler doesnt utilise the viewer properly. floor plan in not usable. copy the viewer platform we use in the itps for floor plans"* — following straight on from an earlier, briefer report the same day ("floorplan does not load into scheduler."). Investigation found **three** real, independent bugs, all fixed here:
+1. `readLevelFile` only ever tried the new flat `Project Saves/Floor Plans/<Project> - <Level>.json` shape, with no fallback to the older per-Level-folder shape (`<Level>/saves/<Level>.utzline.json`) every ITP app already falls back to — so a legacy-shaped project's plan silently never loaded. `readLevelFile` now tries flat first and falls back to a new `readLegacyLevelFile`, matching every ITP app's own dual-path loader.
+2. **The bigger of the two, found while fixing #1:** the level-plan picker's own level list (`listExistingLevels`) was *also* built purely from that same flat Floor Plans directory, via the old `listLevelFiles()` — so a fully legacy-shaped project (no "Project Saves" folder at all, which describes most of Andrew's real, not-yet-migrated projects) never even offered a level to open in the first place, meaning fix #1's fallback never got a chance to run for those projects at all. `listExistingLevels` now detects the project's shape once (`isFlatProject`, the same helper UTZLINE Projects and every ITP app already use) and either reads the flat files' own `name` fields or lists the project's own subfolders directly — excluding the same reserved project-wide folders (`itp-install`/`itp-manufacture`/`itp-delivery`/the old `"itp"` name/`"Project Saves"` itself) every sibling app already excludes from its own level list.
+3. Even once a plan loaded, its markers could render as unlabeled bare dots: `planRenderMarkers()` only drew a label when a marker's own saved `label.text` field was truthy, but this family's label-text convention (`roomlinkDisplayText`, shared with Site Measure/Viewer/every ITP app) computes the label fresh from `joineryCode`/`roomName` rather than storing it, so plenty of real markers had no stored `label.text` at all. Every roomlink marker's label is now always computed via `roomlinkDisplayText` and drawn with a white halo behind it for legibility over any plan image, matching Install ITP's own `buildPlanMarkerEl`. A marker with `hidden: true` is still excluded entirely, same as before.
+
+New regression test `run_legacy_plan_fallback.js` covers a fully legacy-shaped project end to end: the level shows up in the picker, its plan image and a real computed label render even with no stored `label` field at all, a `hidden: true` marker on the same level is excluded, and clicking the now-visible marker still opens the real Set Schedule dialog for the correct item. Full suite re-run clean afterward: 6/6 passing, zero regressions.
 
 **v5 (2026-09-23):** Andrew, verbatim: *"implement the username as per the delivery itp throughout the entire system, but instead of it opening a popup, the button is the selector, when you pick a name it opens a numberpad to input the pin (4 digit pin)."* Scheduler had no identity/name feature of its own before this — it's added here from scratch, copied verbatim from UTZLINE Delivery ITP's own reference implementation of this exact pattern. A new `<select id="identitySelector">` on the Home screen (next to the project list) **is** the button: its own native dropdown lists every known name plus "+ Add a new name…", and choosing one immediately opens a real on-screen numberpad (never a popup) to verify its 4-digit PIN. Adding a brand-new name still types the name as plain text first (a small dedicated prompt, since this app had no existing generic-prompt modal to reuse), then chooses and confirms a PIN via two numberpad rounds, then ticks which apps to show it in (pre-checked "Scheduler"). This reads/writes the same `utzline-identity` IndexedDB (origin-scoped — a name set in any UTZLINE app shows up in all of them) and the same `<ProjectsRoot>/utzline-users.csv` registry every sibling app now shares — the same file, not a separate copy. As a small, disclosed enhancement while wiring this in, `joinery-schedule.json` records now also carry a read-only `setBy` field, stamped with whoever was signed in on this device when Save was pressed — purely informational, it changes no existing gating, matching, or validation. Does NOT touch Site Measure, Viewer, Install ITP, Manufacture ITP, Delivery ITP, or Projects in any way.
 
@@ -111,10 +132,13 @@ pattern:
    projects found in the folder.
 3. **Overall Schedule** — every joinery item, across every project, in one
    sortable table: Project / Level / Room / Joinery ID / Description / Work
-   order # / Required delivery / Manufacture start / Lead time / Status /
-   Delay, plus "View on plan" and "Edit schedule" actions per row.
-   Filterable by project, status, delay state, and a text search (which
-   also matches work order #).
+   order # / Scheduled delivery / Actual delivery / Manufacture start /
+   Lead time / Status / Delay, plus "View on plan" and "Edit schedule"
+   actions per row. Filterable by project, status, delay state, and a text
+   search (which also matches work order #). Hovering (or tapping, on
+   touch) the Status cell opens a popup listing that item's full status
+   history — every stage it's passed through, when, and who changed it
+   (same interaction as UTZLINE Projects' own Joinery Register, added v7).
 4. **Project Schedule** — the same table scoped to one project (no Project
    column), plus a way to jump straight into any level's plan even before
    anything on it has been scheduled.
@@ -144,6 +168,16 @@ pattern:
      manufacture start date and the item hasn't reached "In manufacture"
      yet.
    - **On track** — neither of the above.
+   - Once an item has genuinely reached "Delivered" or later **and** has a
+     real delivered-stage timestamp on record (added v8, per Andrew:
+     "once an item is dispatched, the delay column changes"), the flag
+     above stops applying and instead compares that actual delivered date
+     against the required delivery date: **Delivered late** (more than 2
+     days after), **Delivered early** (more than 2 days before), or
+     **Delivered on time** (within that 2-day window either side,
+     inclusive). An item signed off as "Installed" without ever having a
+     real delivered timestamp (Delivery ITP's own checklist is optional,
+     not mandatory) still falls back to the rules above.
 
 ## Known, disclosed limitations
 
@@ -207,5 +241,32 @@ same convention as the rest of the family):
   correct PIN succeeds; cancelling the numberpad reverts the selector; and
   adding a case-insensitive duplicate name is rejected without touching
   the CSV.
+- `run_legacy_plan_fallback.js` — the v6 floor-plan fix: a fully
+  legacy-shaped project (no "Project Saves" folder at all) still offers its
+  level in the level-plan picker, its plan image loads via the legacy
+  fallback, a marker with no stored `label` field at all still renders a
+  real computed label (not a bare dot), a `hidden: true` marker is
+  excluded, and clicking the visible marker still opens the real Set
+  Schedule dialog for the correct item.
+- `run_status_history_and_actual_delivery.js` — the v7 status-history
+  popup + delivery columns: renamed/added column headers and values,
+  hovering a fully-historied item shows all its history rows in the right
+  order with the right icon/date/attribution, an untouched item shows the
+  popup's empty state, click/tap toggles it, clicking elsewhere or
+  navigating away closes it, and the same popup also works from the
+  Overall Schedule table.
+- `run_post_delivery_delay_outcome.js` — the v8 post-delivery delay
+  outcome: every boundary of the rule against `computeDelayInfo()` directly
+  (exactly on the required date and exactly 2 days either side both read
+  "on time"; 3 days either side tips into late/early), "installed" with a
+  real delivered timestamp gets the same treatment as "delivered" itself,
+  "installed" with no delivered timestamp correctly falls back to the
+  pre-existing rules, pre-delivery scenarios are untouched, and the same
+  outcome renders correctly end to end in the real Delay column and pill
+  class from a seeded `joinery-status.json` history.
+- `run_status_history_gaps.js` — the v9 "days between each process" gap
+  markers: three exact, hand-picked gaps (6 hours → "Same day", 8 days
+  exactly, 1 day exactly), a single-entry item shows no gap at all, and the
+  same gap markers render correctly from the Overall Schedule table too.
 
-Run all five with `./run_all.sh` from that folder.
+Run all nine with `./run_all.sh` from that folder.
