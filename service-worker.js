@@ -55,8 +55,24 @@
 // right-click the marker on the plan), and a "Clear schedule" option in
 // the same dialog. Does NOT touch source.html, Install ITP, Manufacture
 // ITP, or Projects in any way.)
+//
+// (v3, 2026-09-23: Andrew, verbatim: "scheduler floor plan needs the zoom
+// function, reset to centre, zoom on scroll functionality, mouse click on
+// plan to change the dates. currenty only has pan." Added a zoom control
+// group (zoom in / zoom out / Reset view) to the Level Plan topbar --
+// scroll-wheel zoom and pinch-zoom were already wired up (copied from
+// UTZLINE Projects' own plan canvas along with everything else there) but
+// had no visible affordance and no way to reset drift back to a known-good
+// view; "Reset view" re-runs the same fit-to-screen-centred transform the
+// plan already opens with. Also: a plain tap/click on a marker now opens
+// the real Set Schedule dialog directly (previously it only showed a
+// read-only summary toast, a disclosed "accidental-tap safety" design
+// choice Andrew's request above explicitly overrides) -- right-click and
+// long-press are unchanged, now just a redundant second path to the same
+// dialog. Does NOT touch source.html, Install ITP, Manufacture ITP, or
+// Projects in any way.)
 var ICON_VERSION = "v1";
-var CACHE_NAME = "utzline-scheduler-cache-v2";
+var CACHE_NAME = "utzline-scheduler-cache-v4";
 
 var PRECACHE_URLS = [
   "./",

@@ -288,6 +288,16 @@
     background: #101a1f;
   }
   .plan-canvas-topbar span{ font-weight: 600; font-size: 14px; }
+  /* Zoom controls -- pushed to the right of the topbar with margin-left:
+     auto so they sit clear of the title on wide screens and wrap below it
+     on narrow ones, without needing their own media query. Math/behavior
+     (clamp range, wheel/pinch handling, fit-to-view padding) mirrors
+     UTZLINE Projects' own roomlink plan canvas verbatim (see the plan
+     viewer section below); the buttons themselves reuse this app's own
+     existing .btn styles rather than Site Measure's separate zoom-bar
+     look, since Scheduler already has its own consistent button idiom. */
+  .plan-zoom-controls{ display: flex; align-items: center; gap: 6px; margin-left: auto; flex: 0 0 auto; }
+  .plan-zoom-controls .btn.sm{ padding: 6px 12px; min-width: 34px; }
   .plan-canvas-stage{ flex: 1 1 auto; position: relative; overflow: hidden; touch-action: none; }
   .plan-canvas-stage svg{ display: block; width: 100%; height: 100%; cursor: grab; }
   .plan-canvas-hint{
@@ -434,7 +444,7 @@
       <span class="section-title" style="margin:0;">Open a level's plan:</span>
       <select id="levelPlanSelect"></select>
       <button class="btn secondary sm" id="openLevelPlanBtn">Open plan</button>
-      <span class="sub" style="margin:0; font-size:12px;">Right-click (or long-press) a marker on the plan to set its schedule.</span>
+      <span class="sub" style="margin:0; font-size:12px;">Click a marker on the plan to set its schedule (right-click/long-press also works).</span>
     </div>
     <div class="filters-bar">
       <select id="projLevelFilter"><option value="">All levels</option></select>
@@ -489,6 +499,11 @@
   <div class="plan-canvas-topbar">
     <button class="btn secondary sm" id="backFromPlanCanvasBtn">&larr; Back</button>
     <span id="planCanvasTitle"></span>
+    <div class="plan-zoom-controls" role="group" aria-label="Plan zoom controls">
+      <button type="button" class="btn secondary sm" id="planZoomOutBtn" title="Zoom out" aria-label="Zoom out">&minus;</button>
+      <button type="button" class="btn secondary sm" id="planZoomResetBtn" title="Reset view (fit whole plan, centred)" aria-label="Reset view">&#10530; Reset view</button>
+      <button type="button" class="btn secondary sm" id="planZoomInBtn" title="Zoom in" aria-label="Zoom in">&plus;</button>
+    </div>
   </div>
   <div class="plan-canvas-stage" id="planCanvasStageWrap">
     <svg id="planCanvasSvg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
@@ -498,7 +513,7 @@
       </g>
     </svg>
   </div>
-  <div class="plan-canvas-hint">Read-only plan. Right-click a marker (or press and hold, on touch) to set its delivery date and lead time. Tap a marker for a quick status summary.</div>
+  <div class="plan-canvas-hint">Read-only plan. Click (or right-click, or press and hold on touch) a marker to set its delivery date and lead time. Drag to pan, scroll or pinch to zoom, or use the zoom/reset-view buttons above.</div>
 </section>
 
 <!-- ---- Set Schedule modal ---- -->
@@ -509,11 +524,12 @@
     <div class="field">
       <label for="schedDeliveryInput">Required delivery date</label>
       <input type="date" id="schedDeliveryInput">
+      <div class="hint" id="schedDeliveryDisplay"></div>
     </div>
     <div class="field">
       <label for="schedLeadTimeInput">Manufacture lead time (business days)</label>
       <input type="number" id="schedLeadTimeInput" min="0" step="1" value="30">
-      <div class="hint">Defaults to 30 business days. Counts weekdays only (Mon-Fri) -- no public-holiday calendar exists in this app yet.</div>
+      <div class="hint">Defaults to 30 business days. Counts weekdays only (Mon-Fri) -- no public-holiday calendar exists in this app yet. If the required delivery date itself is a Saturday/Sunday (only possible with 0 lead time), the computed start date below is pushed forward to the following Monday.</div>
     </div>
     <div class="computed-box">
       <span class="k">Computed manufacture start date</span>
@@ -835,6 +851,15 @@
       d.setUTCDate(d.getUTCDate() - 1);
       if (!isWeekendUTC(d)) remaining--;
     }
+    // Andrew, 2026-09-23: "if the start date is a weekend, move to the
+    // closest monday directly after" -- with a real (>0) lead time the
+    // walk-back above always lands on a weekday by construction, so this
+    // is a safety-net correction for the one case where it can't: a 0-day
+    // lead time returns the required delivery date itself unchanged, and
+    // that date can be any day the user picked, including a Sat/Sun.
+    var wd = d.getUTCDay();
+    if (wd === 6) d.setUTCDate(d.getUTCDate() + 2); // Saturday -> Monday
+    else if (wd === 0) d.setUTCDate(d.getUTCDate() + 1); // Sunday -> Monday
     return d.toISOString().slice(0, 10);
   }
   // "Today", as a plain local calendar date -- this is what a delay flag
@@ -853,7 +878,12 @@
     var d = new Date(dateStr + "T00:00:00Z");
     if (isNaN(d.getTime())) return dateStr;
     try{
-      return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
+      // Andrew, 2026-09-23: "show both these dates like the bottom one,
+      // but with the day (ie. monday) at the start" -- weekday added as
+      // the leading token (en-US-style locale formatting already puts
+      // weekday first, comma-separated, ahead of the short month/day/year
+      // this function already produced -- e.g. "Thu, Aug 13, 2026").
+      return d.toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
     }catch(e){ return dateStr; }
   }
 
@@ -888,10 +918,32 @@
      Rendering/hit-testing logic copied verbatim from UTZLINE Projects' own
      plan canvas (planApplyTransform/planFitToView/planClientToWorld/
      planZoomAt/planRenderTiles/planRenderMarkers/planMarkerAt and the
-     pointer-based pan/pinch/tap handling), so this app's own plan view
-     looks and feels identical -- this app never creates, edits, or moves a
-     marker, it only reads and displays them, then opens its own Set
-     Schedule dialog on a right-click/long-press hit. */
+     pointer-based pan/pinch/tap handling, plus the plain-wheel-zooms
+     convention its own wheel listener already uses), so this app's own
+     plan view looks and feels identical -- this app never creates, edits,
+     or moves a marker, it only reads and displays them, then opens its own
+     Set Schedule dialog on a hit.
+
+     2026-09-23 (Andrew, verbatim): "scheduler floor plan needs the zoom
+     function, reset to centre, zoom on scroll functionality, mouse click
+     on plan to change the dates. currenty only has pan." Scroll-wheel zoom
+     and pinch-zoom were already wired up here (planZoomAt/the wheel
+     listener/the two-pointer pinch branch below, all copied from Projects
+     -- there just wasn't any visible affordance for it, and no way to
+     zoom/reset without a wheel or a second touch point). Added on top of
+     that: a small zoom control group in the topbar (zoom in/out buttons
+     using the same 1.25x/0.8x step and centre-of-viewport anchor Site
+     Measure's own zoomIn/zoomOut/zoomFit buttons in source.html use, and a
+     "Reset view" button that just re-runs planFitToView -- the same
+     fit-to-screen-centred transform the plan already opens with). Also,
+     per Andrew's 4th ask, a plain tap/click on a marker now opens the real
+     Set Schedule dialog directly (onPlanTap delegates straight to
+     onPlanRightClickOrLongPress, the exact same function/dialog the right-
+     click and long-press paths already used) instead of only showing a
+     read-only summary toast -- that "accidental-tap safety" behavior was a
+     previous disclosed design choice, and this explicit request overrides
+     it. Right-click and long-press are left working exactly as before
+     (now simply a redundant second way to reach the same dialog). */
   function roomlinkDisplayText(obj){
     return obj.joineryCode || obj.roomName || "";
   }
@@ -1078,6 +1130,24 @@
     onPlanRightClickOrLongPress(world.x, world.y);
   });
 
+  // Zoom buttons (topbar) -- same step factors and viewport-centre anchor
+  // as Site Measure's own zoomIn/zoomOut buttons in source.html
+  // (zoomBy(1.25)/zoomBy(0.8) there), reusing planZoomAt's own clamp
+  // (0.05-20) so a button press can never exceed what wheel/pinch already
+  // allow. "Reset view" just re-runs the same planFitToView() the plan
+  // already opens with, so it always lands on a known-good, centred,
+  // whole-plan-visible transform regardless of how far pan/zoom drifted.
+  var planZoomOutBtn = document.getElementById("planZoomOutBtn");
+  var planZoomInBtn = document.getElementById("planZoomInBtn");
+  var planZoomResetBtn = document.getElementById("planZoomResetBtn");
+  function planZoomByButton(factor){
+    var r = planCanvasStageWrap.getBoundingClientRect();
+    planZoomAt(r.left + r.width / 2, r.top + r.height / 2, planView.scale * factor);
+  }
+  planZoomInBtn.addEventListener("click", function(){ planZoomByButton(1.25); });
+  planZoomOutBtn.addEventListener("click", function(){ planZoomByButton(0.8); });
+  planZoomResetBtn.addEventListener("click", function(){ planFitToView(); });
+
   function planFindItemForMarker(hit){
     return readJoineryItems(planActiveProjectHandle).then(function(items){
       return items.filter(function(it){
@@ -1085,26 +1155,19 @@
       })[0] || null;
     });
   }
-  // A plain tap/click: a quick, read-only glance at the item's current
-  // status + schedule -- editing always goes through right-click/long-press
-  // (or the table's own "Edit schedule" button), never a plain tap.
+  // A plain tap/click on a marker: Andrew's explicit request (2026-09-23,
+  // verbatim: "mouse click on plan to change the dates") -- open the real
+  // Set Schedule dialog directly, the exact same one right-click/long-press
+  // already opens, by delegating straight to onPlanRightClickOrLongPress.
+  // PREVIOUS behavior (kept only in this comment for the record): a plain
+  // tap used to show a read-only status/schedule summary toast instead, as
+  // a disclosed "accidental-tap safety" design choice so a stray tap could
+  // never open an edit dialog by accident. Andrew's request above
+  // explicitly overrides that default -- right-click and long-press still
+  // work exactly as before, so this is simply a second, more direct way to
+  // reach the same dialog now.
   function onPlanTap(worldX, worldY){
-    var hit = planMarkerAt(worldX, worldY);
-    if (!hit){ return; }
-    planFindItemForMarker(hit).then(function(item){
-      if (!item){ showToast((hit.roomName || "") + (hit.joineryCode ? " · " + hit.joineryCode : "") + " — no matching item record found."); return; }
-      return Promise.all([readJoineryStatuses(planActiveProjectHandle), readJoinerySchedule(planActiveProjectHandle)]).then(function(res){
-        var statusKey = (findJoineryStatus(res[0], item.level, item.room, item.joineryId) || {}).status || "";
-        var schedRec = findScheduleRecord(res[1], item.level, item.room, item.joineryId);
-        var label = (item.joineryId || item.room || "Item") + (item.workOrderNo ? " (WO " + item.workOrderNo + ")" : "") + " — " + joineryStatusLabel(statusKey);
-        if (schedRec && schedRec.requiredDeliveryDate){
-          label += " · delivery " + formatDateDisplay(schedRec.requiredDeliveryDate);
-        } else {
-          label += " · no schedule set (right-click to add)";
-        }
-        showToast(label, 3400);
-      });
-    });
+    onPlanRightClickOrLongPress(worldX, worldY);
   }
   function onPlanRightClickOrLongPress(worldX, worldY){
     var hit = planMarkerAt(worldX, worldY);
@@ -1170,6 +1233,7 @@
   var schedDeliveryInput = document.getElementById("schedDeliveryInput");
   var schedLeadTimeInput = document.getElementById("schedLeadTimeInput");
   var schedComputedStart = document.getElementById("schedComputedStart");
+  var schedDeliveryDisplay = document.getElementById("schedDeliveryDisplay");
   var scheduleModalError = document.getElementById("scheduleModalError");
   var schedClearBtn = document.getElementById("schedClearBtn");
   var schedCancelBtn = document.getElementById("schedCancelBtn");
@@ -1180,6 +1244,7 @@
   function updateComputedStartPreview(){
     var delivery = schedDeliveryInput.value;
     var lead = schedLeadTimeInput.value;
+    schedDeliveryDisplay.textContent = delivery ? formatDateDisplay(delivery) : "";
     if (!delivery){ schedComputedStart.textContent = "--"; return; }
     var start = subtractBusinessDays(delivery, lead === "" ? DEFAULT_LEAD_TIME_DAYS : lead);
     schedComputedStart.textContent = start ? formatDateDisplay(start) : "--";

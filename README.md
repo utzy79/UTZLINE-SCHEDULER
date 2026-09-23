@@ -1,6 +1,10 @@
 # UTZLINE Scheduler — installable app
 
-**Current version: v2** (its own independent version line, separate from every other app in the family — bump this line every time a new build ships.)
+**Current version: v4** (its own independent version line, separate from every other app in the family — bump this line, and add a dated entry below, every time a new build ships.)
+
+**v4 (2026-09-23):** Andrew, verbatim: *"show both these dates like the bottom one, but with the day (ie.monday) at the start. if the start date is a weekend, move to the closest monday directly after"* — about the Set Schedule dialog's two dates. `formatDateDisplay()` (used everywhere a date is shown as text in this app, not just this dialog) now leads with the weekday, e.g. "Thu, Aug 13, 2026" instead of "Aug 13, 2026". The Required Delivery Date field (a native date-picker input, which can't show a weekday inline) gained a new read-only line right below it showing that same formatted style, live-updating as you change the date — matching the Computed Manufacture Start Date box's own display style, per "show both these dates like the bottom one." Separately, `subtractBusinessDays()` now pushes its result forward to the next Monday if it would otherwise land on a Saturday or Sunday — a real edge case with a 0-day lead time (the function then returns the required delivery date itself unchanged, with no weekday check), not a hypothetical: a 0-lead-time item whose own delivery date is a weekend would previously have shown a weekend "manufacture start date," which is what's now corrected. With any lead time above 0 the walk-back already only ever lands on a weekday, so this is a safety net for that one case, not a change to the everyday calculation.
+
+**v3 (2026-09-23):** Andrew, verbatim: *"scheduler floor plan needs the zoom function, reset to centre, zoom on scroll functionality, mouse click on plan to change the dates. currenty only has pan."* Added a small zoom control group (zoom in / zoom out / **Reset view**) to the Level Plan topbar. Scroll-wheel zoom (centred on the cursor) and two-finger pinch-zoom were already implemented under the hood — copied verbatim from UTZLINE Projects' own plan canvas along with the rest of this viewer — there just wasn't a visible affordance for it, or any way to reset drift back to a known-good view; **Reset view** re-runs the exact fit-to-screen-centred transform the plan already opens with. Zoom buttons use the same 1.25x/0.8x step and viewport-centre anchor Site Measure's own zoomIn/zoomOut buttons use in `source.html`, and share `planZoomAt`'s existing clamp (scale 0.05–20). Also, per Andrew's 4th ask: **a plain tap/click on a marker now opens the real Set Schedule dialog directly**, the same dialog right-click/long-press already opened (`onPlanTap` now delegates straight to `onPlanRightClickOrLongPress`) — previously a plain tap only showed a read-only status/schedule summary toast, a disclosed "accidental-tap safety" design choice from v1 that this explicit request overrides. Right-click and long-press are unchanged and still work exactly as before, now simply a redundant second path to the same dialog.
 
 **v2 (2026-09-23):** added the Work Order # column, requested alongside the same change to UTZLINE Projects ("This and the projects app needs a work order # section"). Scheduler only *displays* it — it reads `workOrderNo` straight off each `joinery-items.json` record (the field Projects now writes at creation time) in both the Overall and Project Schedule tables, in the Level Plan's tap summary and Set Schedule dialog subtitle, and in every text search box, with the same "—" placeholder convention as every other blank cell for items created before the field existed. Scheduler never writes this field — it's read-only here, same as `description` or `joineryId`.
 
@@ -70,14 +74,15 @@ know or care that this new file exists.
    anything on it has been scheduled.
 5. **Level Plan** — a read-only pan/zoom view of a level's saved floor plan
    and its markers (the same rendering the rest of the family already
-   uses). **Right-click a marker** (or **press and hold**, on a touch
-   device — there's no native right-click there) to open the **Set
-   Schedule** dialog for that item: Required Delivery Date and Manufacture
-   Lead Time (business days, defaults to 30), with the computed
-   Manufacture Start Date shown live as you type, plus a "Clear schedule"
-   option. A plain tap/click on a marker instead shows a quick, read-only
-   status/schedule summary — it never opens the editing dialog, so a stray
-   tap can't start an edit by accident.
+   uses). Drag to pan; scroll-wheel or pinch to zoom (centred on the
+   cursor/pinch midpoint); zoom in/out buttons and a **Reset view** button
+   (fits the whole plan back into view, centred, undoing any pan/zoom
+   drift) sit in the topbar. **Click a marker** (right-click and
+   press-and-hold/long-press also still work, as alternate paths to the
+   same place) to open the **Set Schedule** dialog for that item: Required
+   Delivery Date and Manufacture Lead Time (business days, defaults to
+   30), with the computed Manufacture Start Date shown live as you type,
+   plus a "Clear schedule" option.
 6. **Status & delay flags** — status is read live from the shared
    `joinery-status.json` pipeline (Created / Check measured / In
    manufacture / Ready to dispatch / Delivered / Installed). Delay is
@@ -129,7 +134,21 @@ same convention as the rest of the family):
   schedule through the real Save/Clear buttons, confirms
   `joinery-items.json` is never touched, and all six delay-flag scenarios.
 - `run_overall_and_plan_view.js` — cross-project aggregation and filters
-  on the Overall Schedule screen, unset-dates-always-sort-last, and the
-  plan view's tap-vs-right-click/long-press distinction.
+  on the Overall Schedule screen, unset-dates-always-sort-last, and that a
+  plain click and right-click/long-press on a plan marker both open the
+  Set Schedule dialog for the correct item.
+- `run_plan_zoom_and_reset.js` — the Level Plan's zoom/reset-view controls:
+  a real wheel event changes the rendered transform's scale (zoomed toward
+  the cursor), the **Reset view** button restores a known-good fit-to-
+  screen transform after pan+zoom drift, a plain click on a marker opens
+  the Set Schedule dialog and a date can be saved through it, and
+  right-click still also opens the same dialog (regression check).
+- `run_date_weekday_format_and_weekend_shift.js` — the v4 date-display
+  change: the delivery-date field's new weekday-led read-only line and the
+  computed-start box both format as "Thu, Aug 13, 2026"; an ordinary
+  (>0-day lead) computation always lands on a weekday, unaffected; the
+  0-lead-time edge case (delivery date itself a Saturday, then a Sunday) is
+  pushed forward to the very next Monday, confirmed both in the live
+  preview and in what's actually saved to `joinery-schedule.json`.
 
-Run both with `./run_all.sh` from that folder.
+Run all four with `./run_all.sh` from that folder.
