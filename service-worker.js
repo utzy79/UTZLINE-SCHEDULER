@@ -139,8 +139,61 @@
 // removes most of the forced horizontal scroll on ordinary desktop/tablet
 // viewports. The identical fix shipped to UTZLINE Projects' own Register/
 // Rework Register screens the same day.)
+//
+// (v11, 2026-09-23: Andrew, verbatim: "Manufacture status needs to be
+// split up into 2 parts. We need a machined and a manufactured tab. All
+// traceable by user name. Machined to have its own app. Called machine
+// schedule. This is where the machinist can mark off a joinery item as
+// complete. It will add their name and date time to the system." A new
+// "machined" stage is inserted into the shared joinery-status pipeline,
+// between "in_manufacture" and "manufactured" -- written exclusively by a
+// brand-new sibling app, "UTZLINE Machine Schedule" (built in parallel with
+// this round, a separate codebase, not touched from here). Scheduler
+// remains strictly read-only against joinery-status.json: it never sets
+// "machined" itself, it only displays it -- joineryStatusRank/Label/Icon
+// gained a "machined" case (⚙️ / "Machined"), both the Overall and
+// per-project Schedule screens' status filter dropdowns gained a matching
+// "Machined" option, and the status-history hover/tap popup needed no
+// change at all since it already renders any history entry generically
+// through those same label/icon functions.
+//
+// Inserting a stage in the MIDDLE of the pipeline (rather than appending
+// one at the end, like every earlier stage addition in this family) shifts
+// every rank number from "manufactured" onward up by one: manufactured
+// 3->4, delivered 4->5, installed 5->6 ("in_manufacture" itself, and
+// everything before it, is unaffected -- the new stage sits after it).
+// computeDelayInfo() has three hard-coded rank-threshold comparisons, and
+// this is exactly the kind of subtle bug this comment history has flagged
+// before elsewhere in this family when a shared enum shifted under code
+// that compared its numbers by value instead of by name: each threshold
+// was re-derived against what it actually MEANS, not blindly bumped --
+// - "has this item reached delivered-or-later" (switches into the v8
+//   post-delivery early/late/on-time comparison): rank >= 4 -> rank >= 5
+//   (delivered's new rank).
+// - "is this item not yet installed" (the delivery-overdue exemption --
+//   installed is the real completion marker, "delivered" being a
+//   reserved-but-currently-unreachable-as-a-dead-end stage in this
+//   pipeline): rank < 5 -> rank < 6 (installed's new rank).
+// - "is this item not yet in_manufacture" (the manufacture-start-overdue
+//   trigger): rank < 2 -- left UNCHANGED, since in_manufacture's own rank
+//   is still 2. Bumping this one too would have been the actual bug: an
+//   item newly sitting at "machined" (rank 3) would then have wrongly
+//   tripped "Manufacture start overdue" (a stage it's already well past)
+//   instead of correctly falling through to "On track"/"Delivery overdue",
+//   the same treatment "manufactured" itself already got before this round.
+//
+// Verified with a throwaway Node harness running computeDelayInfo() (old
+// ranks/thresholds vs. new) across measured/in_manufacture/manufactured/
+// delivered/installed: identical outputs on both sides for every one of
+// those pre-existing statuses, confirming the renumbering is a pure no-op
+// for every status that didn't move. The new "machined" status (rank 3,
+// which didn't exist under the old scheme) was checked on its own and
+// correctly does NOT trip "Manufacture start overdue" and correctly DOES
+// still trip "Delivery overdue" once past the required delivery date, same
+// as "manufactured" already did. Full 9-file suite re-run clean afterward,
+// zero regressions.)
 var ICON_VERSION = "v1";
-var CACHE_NAME = "utzline-scheduler-cache-v10";
+var CACHE_NAME = "utzline-scheduler-cache-v11";
 
 var PRECACHE_URLS = [
   "./",

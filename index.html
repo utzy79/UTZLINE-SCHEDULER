@@ -546,6 +546,7 @@
         <option value="__created__">Created</option>
         <option value="measured">Check measured</option>
         <option value="in_manufacture">In manufacture</option>
+        <option value="machined">Machined</option>
         <option value="manufactured">Ready to dispatch</option>
         <option value="delivered">Delivered</option>
         <option value="installed">Installed</option>
@@ -611,6 +612,7 @@
         <option value="__created__">Created</option>
         <option value="measured">Check measured</option>
         <option value="in_manufacture">In manufacture</option>
+        <option value="machined">Machined</option>
         <option value="manufactured">Ready to dispatch</option>
         <option value="delivered">Delivered</option>
         <option value="installed">Installed</option>
@@ -1216,12 +1218,34 @@
      Copied verbatim from UTZLINE Projects / source.html / both ITP apps.
      This app never writes joinery-status.json -- Site Measure's own "Mark
      as check measured", and each ITP's own checklist sign-off/open, are
-     still the only writers anywhere in the family. */
+     still the only writers anywhere in the family.
+
+     UPDATED 2026-09-23, Andrew, verbatim: "Manufacture status needs to be
+     split up into 2 parts. We need a machined and a manufactured tab. All
+     traceable by user name. Machined to have its own app. Called machine
+     schedule. This is where the machinist can mark off a joinery item as
+     complete. It will add their name and date time to the system." A new
+     "machined" stage is inserted into the pipeline BETWEEN "in_manufacture"
+     and "manufactured" -- it is written exclusively by the new sibling app
+     "UTZLINE Machine Schedule" (built in parallel with this round, not part
+     of this codebase). Scheduler remains strictly read-only against
+     joinery-status.json, same as always: it never sets "machined" itself,
+     it only displays it wherever it already displays any other status
+     (labels/icons/history popup/filter dropdowns). Inserting a stage in the
+     MIDDLE of the pipeline shifts every rank number from "manufactured"
+     onward up by one (manufactured 3->4, delivered 4->5, installed 5->6) --
+     every hard-coded rank-threshold comparison in computeDelayInfo() below
+     was written against the OLD numbers and has been re-derived against
+     the new ones for the same real-world meaning (see that function's own
+     updated comment for the full reasoning). "in_manufacture" itself did
+     not move (still rank 2), so the one threshold that reads "before
+     in_manufacture" is deliberately left unchanged. */
   function joineryStatusRank(status){
     switch (status){
-      case "installed": return 5;
-      case "delivered": return 4;
-      case "manufactured": return 3;
+      case "installed": return 6;
+      case "delivered": return 5;
+      case "manufactured": return 4;
+      case "machined": return 3;
       case "in_manufacture": return 2;
       case "measured": return 1;
       default: return 0;
@@ -1232,6 +1256,7 @@
       case "installed": return "Installed";
       case "delivered": return "Delivered";
       case "manufactured": return "Ready to dispatch";
+      case "machined": return "Machined";
       case "in_manufacture": return "In manufacture";
       case "measured": return "Check measured";
       default: return "Created";
@@ -1242,6 +1267,7 @@
       case "installed": return "🏆";
       case "delivered": return "🚚";
       case "manufactured": return "📦";
+      case "machined": return "⚙️";
       case "in_manufacture": return "🏭";
       case "measured": return "📏";
       default: return "";
@@ -1400,7 +1426,7 @@
              -> "Delivered early"
        - within that +/-2 day window (inclusive)
              -> "Delivered on time"
-     A record can reach "installed" (rank 5) without ever having a
+     A record can reach "installed" (rank 6) without ever having a
      "delivered" history entry at all -- the forward-only pipeline allows
      jumping straight from an earlier stage to "installed" if Delivery
      ITP's own checklist was never used for that item -- so this only takes
@@ -1408,20 +1434,46 @@
      genuinely exists; otherwise it falls through to the pre-existing
      before-the-fact rules unchanged (which is why a fully "installed" item
      with no delivered timestamp still reads via the old rules, same as
-     before this round -- rank 5 already always passes the old
-     "delivery overdue" check regardless). */
+     before this round -- rank 6 already always passes the old
+     "delivery overdue" check regardless).
+
+     UPDATED 2026-09-23, Andrew, verbatim (see the shared-pipeline comment
+     above for the full quote): a new "machined" stage was inserted into
+     the pipeline between "in_manufacture" and "manufactured", shifting
+     "manufactured"/"delivered"/"installed" up one rank each (3/4/5 ->
+     4/5/6). This function has THREE hard-coded rank-threshold literals,
+     each re-derived below against what it's actually meant to mean --
+     NOT a blind "add 1 to everything", since only two of the three sit on
+     the shifted side of the new stage:
+       - "has this item genuinely reached delivered-or-later" (switches
+         into post-delivery early/late/on-time mode): was `rank >= 4`
+         (delivered's old rank), now `rank >= 5` (delivered's new rank).
+       - "is this item not yet installed" (the delivery-overdue exemption
+         -- installed is the real completion marker): was `rank < 5`
+         (installed's old rank), now `rank < 6` (installed's new rank).
+       - "is this item not yet in_manufacture" (the manufacture-start-
+         overdue trigger): stays `rank < 2` UNCHANGED -- in_manufacture's
+         own rank is still 2, since "machined" was inserted AFTER it, not
+         before it. An item now sitting at the new "machined" stage (rank
+         3) is >= 2, so it correctly does NOT trip this "manufacture start
+         overdue" flag (it's well past manufacture start by then) and
+         correctly falls through to "On track" (or "Delivery overdue" if
+         it's also gone past the required delivery date) -- exactly the
+         same treatment "manufactured" itself already got before this
+         round, which is the right behaviour for a mid-pipeline stage that
+         didn't exist yet when these thresholds were first written. */
   function computeDelayInfo(scheduleRec, statusKey, todayStr, actualDeliveredAt){
     if (!scheduleRec || !scheduleRec.requiredDeliveryDate){
       return { key: "none", label: "No schedule set", severity: 0 };
     }
     var rank = joineryStatusRank(statusKey);
-    if (rank >= 4 && actualDeliveredAt){
+    if (rank >= 5 && actualDeliveredAt){
       var diffDays = daysBetweenDateStrs(actualDeliveredAt, scheduleRec.requiredDeliveryDate); // actual - required
       if (diffDays > 2) return { key: "late", label: "Delivered late", severity: 3 };
       if (diffDays < -2) return { key: "early", label: "Delivered early", severity: 0 };
       return { key: "ontime", label: "Delivered on time", severity: 0 };
     }
-    if (todayStr > scheduleRec.requiredDeliveryDate && rank < 5){
+    if (todayStr > scheduleRec.requiredDeliveryDate && rank < 6){
       return { key: "delivery", label: "Delivery overdue", severity: 3 };
     }
     if (scheduleRec.manufactureStartDate && todayStr > scheduleRec.manufactureStartDate && rank < 2){
