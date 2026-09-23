@@ -192,8 +192,63 @@
 // still trip "Delivery overdue" once past the required delivery date, same
 // as "manufactured" already did. Full 9-file suite re-run clean afterward,
 // zero regressions.)
+//
+// (v12, 2026-09-23: Andrew, verbatim: "floor plans viewer on both schedules
+// do not work. rewrite them using the same format as the itp apps." Both
+// entry points into this app's single shared plan-canvas screen -- the
+// Overall Schedule table's "View on plan" button AND the per-project
+// Schedule table's own "View on plan"/"Open plan" -- go through the same
+// openPlanCanvasForLevel()/#planCanvasSvg, so "both schedules" were really
+// one and the same bug.
+//
+// ROOT CAUSE: the plan `<svg id="planCanvasSvg">` in index.html carried
+// viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" -- left over
+// from an earlier draft of this screen and never actually matching this
+// app's own pan/zoom math. Every ITP app's own working plan viewer (Install
+// ITP / Manufacture ITP / Delivery ITP's #levelPlanSvg, all confirmed
+// working per Andrew's own screenshot) has NO viewBox at all: with none,
+// an inline SVG's user-coordinate space is simply 1 unit = 1 CSS pixel of
+// its rendered box (this app's CSS already sets width:100%/height:100% on
+// it), which is exactly what planFitToView/planClientToWorld/planZoomAt
+// assume when they compute translate()/scale() straight from
+// planCanvasStageWrap's clientWidth/clientHeight in CSS pixels. With
+// viewBox="0 0 100 100" present instead, the browser first maps that
+// 100x100 unit square onto the rendered box (letterboxed, per
+// preserveAspectRatio), so 1 user unit became ~(renderedSize/100) pixels --
+// a completely different scale to the one the JS math was computing in. A
+// real plan image (e.g. 1200x900) positioned and fit via that pixel-based
+// math ended up placed almost entirely outside the 0-100 unit square that
+// was actually visible, so the stage rendered as a plain black rectangle --
+// image, tiles and markers all present in the DOM (readLevelFile/
+// planRenderTiles/planRenderMarkers were never the problem) but positioned
+// far outside the tiny sliver of user-space the viewBox actually displays.
+// This is also why the existing run_plan_zoom_and_reset.js regression test
+// never caught it: that test only checks the JS-side pan/zoom/click math
+// against itself (planView.tx/ty/scale round-tripping through
+// planClientToWorld), which stayed internally consistent throughout --
+// the bug was purely in how the browser's own SVG viewBox transform sits
+// on top of that math, invisible to a check that never inspects actual
+// rendered pixels. Confirmed with a real headless-Chromium screenshot
+// before fixing: a seeded project with a real (non-1x1) floor plan image
+// and a marker at a known position rendered as an entirely blank black
+// screen, with zero console/page errors -- a silent rendering bug, not a
+// load failure or exception.
+//
+// FIX: removed viewBox/preserveAspectRatio from #planCanvasSvg entirely,
+// matching the ITP apps' own <svg id="levelPlanSvg"> byte-for-byte (no
+// viewBox, width/height 100% via CSS only) -- the one change needed to put
+// this app's already-correct image-loading (readLevelFile's flat-then-
+// legacy dual-path reader, matching every ITP app's own loadLevelPlan) and
+// already-correct marker rendering (planRenderMarkers, already ported from
+// Install ITP's buildPlanMarkerEl per the v3 entry above) into a coordinate
+// space its own pan/zoom math actually agrees with. Re-verified with the
+// same seeded-project screenshot harness: the floor plan image now renders
+// correctly, the marker sits exactly on its saved (x, y) position, pan/
+// zoom/reset and marker-tap (opening the Set Schedule dialog) all still
+// work, and the full existing 9-file regression suite (run_all.sh) passes
+// unchanged.
 var ICON_VERSION = "v1";
-var CACHE_NAME = "utzline-scheduler-cache-v11";
+var CACHE_NAME = "utzline-scheduler-cache-v12";
 
 var PRECACHE_URLS = [
   "./",
