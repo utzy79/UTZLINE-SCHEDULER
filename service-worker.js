@@ -71,8 +71,25 @@
 // long-press are unchanged, now just a redundant second path to the same
 // dialog. Does NOT touch source.html, Install ITP, Manufacture ITP, or
 // Projects in any way.)
+//
+// (v5, 2026-09-23: Andrew, verbatim: "implement the username as per the
+// delivery itp throughout the entire system, but instead of it opening a
+// popup, the button is the selector, when you pick a name it opens a
+// numberpad to input the pin (4 digit pin)." This app had no identity
+// feature of its own before this -- added from scratch, copied verbatim
+// from UTZLINE Delivery ITP's own reference implementation of this exact
+// pattern. A new <select id="identitySelector"> on the Home screen IS the
+// button: its dropdown lists every known name plus "+ Add a new name...",
+// and choosing one opens a real on-screen numberpad (not a popup) to
+// verify its 4-digit PIN; adding a brand-new name still types the name as
+// text first. Reads/writes the same "utzline-identity" IndexedDB and the
+// same <ProjectsRoot>/utzline-users.csv registry every sibling UTZLINE app
+// now shares. Also, as a small disclosed enhancement, each
+// joinery-schedule.json record now stamps a read-only `setBy` field with
+// whoever was signed in when Save was pressed. Does NOT touch source.html,
+// Install ITP, Manufacture ITP, Delivery ITP, or Projects in any way.)
 var ICON_VERSION = "v1";
-var CACHE_NAME = "utzline-scheduler-cache-v4";
+var CACHE_NAME = "utzline-scheduler-cache-v5";
 
 var PRECACHE_URLS = [
   "./",

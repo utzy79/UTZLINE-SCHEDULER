@@ -1,6 +1,8 @@
 # UTZLINE Scheduler — installable app
 
-**Current version: v4** (its own independent version line, separate from every other app in the family — bump this line, and add a dated entry below, every time a new build ships.)
+**Current version: v5** (its own independent version line, separate from every other app in the family — bump this line, and add a dated entry below, every time a new build ships.)
+
+**v5 (2026-09-23):** Andrew, verbatim: *"implement the username as per the delivery itp throughout the entire system, but instead of it opening a popup, the button is the selector, when you pick a name it opens a numberpad to input the pin (4 digit pin)."* Scheduler had no identity/name feature of its own before this — it's added here from scratch, copied verbatim from UTZLINE Delivery ITP's own reference implementation of this exact pattern. A new `<select id="identitySelector">` on the Home screen (next to the project list) **is** the button: its own native dropdown lists every known name plus "+ Add a new name…", and choosing one immediately opens a real on-screen numberpad (never a popup) to verify its 4-digit PIN. Adding a brand-new name still types the name as plain text first (a small dedicated prompt, since this app had no existing generic-prompt modal to reuse), then chooses and confirms a PIN via two numberpad rounds, then ticks which apps to show it in (pre-checked "Scheduler"). This reads/writes the same `utzline-identity` IndexedDB (origin-scoped — a name set in any UTZLINE app shows up in all of them) and the same `<ProjectsRoot>/utzline-users.csv` registry every sibling app now shares — the same file, not a separate copy. As a small, disclosed enhancement while wiring this in, `joinery-schedule.json` records now also carry a read-only `setBy` field, stamped with whoever was signed in on this device when Save was pressed — purely informational, it changes no existing gating, matching, or validation. Does NOT touch Site Measure, Viewer, Install ITP, Manufacture ITP, Delivery ITP, or Projects in any way.
 
 **v4 (2026-09-23):** Andrew, verbatim: *"show both these dates like the bottom one, but with the day (ie.monday) at the start. if the start date is a weekend, move to the closest monday directly after"* — about the Set Schedule dialog's two dates. `formatDateDisplay()` (used everywhere a date is shown as text in this app, not just this dialog) now leads with the weekday, e.g. "Thu, Aug 13, 2026" instead of "Aug 13, 2026". The Required Delivery Date field (a native date-picker input, which can't show a weekday inline) gained a new read-only line right below it showing that same formatted style, live-updating as you change the date — matching the Computed Manufacture Start Date box's own display style, per "show both these dates like the bottom one." Separately, `subtractBusinessDays()` now pushes its result forward to the next Monday if it would otherwise land on a Saturday or Sunday — a real edge case with a 0-day lead time (the function then returns the required delivery date itself unchanged, with no weekday check), not a hypothetical: a 0-lead-time item whose own delivery date is a weekend would previously have shown a weekend "manufacture start date," which is what's now corrected. With any lead time above 0 the walk-back already only ever lands on a weekday, so this is a safety net for that one case, not a change to the everyday calculation.
 
@@ -47,12 +49,56 @@ project, alongside those existing files:
 
 - `joinery-schedule.json` — this app's own schedule records: `{ level,
   room, joineryId, requiredDeliveryDate, manufactureLeadTimeDays,
-  manufactureStartDate, updatedAt }`, matched to a joinery item by the same
-  `(level, room, joineryId)` triple `joinery-status.json` already uses.
+  manufactureStartDate, updatedAt, setBy }`, matched to a joinery item by
+  the same `(level, room, joineryId)` triple `joinery-status.json` already
+  uses. `setBy` (added v5) is read-only informational attribution —
+  whoever was signed in via the identity selector when Save was pressed,
+  or `""` if nobody was — and never gates or validates anything.
+
+Also, at the **Projects-root level** (a sibling of every project folder,
+not inside one), Scheduler now reads/writes the same shared
+`utzline-users.csv` name+PIN registry every other UTZLINE app uses (added
+v5, see "Shared name+PIN identity" below).
 
 Nothing about how a project is organised changes for Site Measure, Viewer,
 Install ITP, Manufacture ITP, or Projects to keep working — none of them
 know or care that this new file exists.
+
+## Shared name+PIN identity (v5)
+
+Andrew, verbatim: *"implement the username as per the delivery itp
+throughout the entire system, but instead of it opening a popup, the
+button is the selector, when you pick a name it opens a numberpad to
+input the pin (4 digit pin)."*
+
+Scheduler had no identity feature of its own before this. It's copied
+verbatim from UTZLINE Delivery ITP's own reference implementation of this
+pattern:
+
+- A `<select id="identitySelector">` on the Home screen **is** the button
+  — its own dropdown lists every known name plus "+ Add a new name…". No
+  separate "Set your name" button or popup.
+- Picking an existing name opens a real on-screen 4-digit numberpad to
+  verify its PIN — a wrong PIN shakes/clears the pad for another try and
+  never changes the signed-in identity; cancelling reverts the selector to
+  whoever was previously signed in.
+- Picking "+ Add a new name…" asks for the name as plain text first (a
+  small dedicated prompt — this app had no existing generic-prompt modal
+  to reuse), rejects a case-insensitive duplicate, then chooses and
+  confirms a 4-digit PIN via two numberpad rounds, then shows a "Show me
+  in" checklist of every UTZLINE app (pre-checked "Scheduler" — reference
+  only, for Andrew's own admin use; it never restricts sign-in anywhere).
+- The name+PIN itself lives in `<ProjectsRoot>/utzline-users.csv`
+  (`Name,PIN,ShowInApps`, PIN in plain text on purpose — a reference-only
+  attribution registry Andrew can inspect or hand-edit directly, not a
+  real access-control system) — the exact same file every sibling UTZLINE
+  app reads and writes, at the Projects-root level. Who's currently signed
+  in on *this device* lives in the same shared `utzline-identity`
+  IndexedDB database every sibling app already uses (origin-scoped, so a
+  name set in one UTZLINE app shows up in all of them).
+- No in-app "forgot PIN" flow, by design — resetting or clearing a PIN, or
+  freeing up a name, is a plain file-manager/spreadsheet edit to
+  `utzline-users.csv`.
 
 ## What it does
 
@@ -150,5 +196,16 @@ same convention as the rest of the family):
   0-lead-time edge case (delivery date itself a Saturday, then a Sunday) is
   pushed forward to the very next Monday, confirmed both in the live
   preview and in what's actually saved to `joinery-schedule.json`.
+- `run_identity_pin.js` — the v5 shared name+PIN identity selector: adding
+  a brand-new name through the real UI (name prompt → choose-PIN numberpad
+  → confirm-PIN numberpad, including a mismatched-confirm-then-retry case)
+  → the "show me in" app-checks modal (pre-checked "Scheduler") → the
+  correct row written to `utzline-users.csv` at the Projects-root level,
+  and the name then appearing as a real selector option; picking an
+  existing name opens a numberpad naming them, a wrong PIN is
+  rejected/retryable without changing the signed-in identity, and the
+  correct PIN succeeds; cancelling the numberpad reverts the selector; and
+  adding a case-insensitive duplicate name is rejected without touching
+  the CSV.
 
-Run all four with `./run_all.sh` from that folder.
+Run all five with `./run_all.sh` from that folder.
