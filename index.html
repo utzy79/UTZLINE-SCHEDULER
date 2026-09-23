@@ -1,0 +1,1722 @@
+<!doctype html>
+<!--
+  UTZLINE Scheduler -- a NEW, SEPARATE, standalone app in the UTZLINE
+  family. Requested directly by Andrew (2026-09-23):
+
+    "now create a schedular app (seperate) that runs off all this info.
+    it has a page thats a sortable overall schedule and also project
+    specific viewable shcedules, but the dates are set by right clicking
+    on your joinery plan in the scheduler and adding a required delivery
+    date, and a manufacture lead time in business days (defaults to 30
+    days), this gives a manufacture start date that is the delivery date
+    - the manufacture lead time. It creates a sortable database similar
+    to the joinery register (attached photo). It also shows the current
+    status and flags any delays.
+    Do not change any other apps. they are all working, just build the
+    standalone scheduler"
+
+  Like Install ITP / Manufacture ITP / Projects, this is NOT built from
+  source.html -- it's its own small, purpose-built codebase, since it
+  needs a different kind of screen (sortable schedule tables + a
+  lightweight read-only plan viewer), not a drawing canvas.
+
+  DATA IT READS (same Projects-root folder every other app uses, strictly
+  READ-ONLY against every one of these -- this app never writes into a
+  file another app owns):
+    <Projects root>/<Project>/
+      joinery-items.json                          <- {joineryId, description, level, room, status} records
+      joinery-status.json                         <- the shared, forward-only status pipeline (rank/label/icon copied verbatim below, read-only)
+      Project Saves/Floor Plans/<Project> - <Level>.json   <- floor plan image + `markers` (roomlink objects), for the plan viewer
+
+  DATA IT OWNS (the only thing this app ever writes):
+    <Projects root>/<Project>/joinery-schedule.json   <- one record per scheduled item:
+      { level, room, joineryId, requiredDeliveryDate ("YYYY-MM-DD"),
+        manufactureLeadTimeDays (int, default 30), manufactureStartDate
+        ("YYYY-MM-DD", computed = requiredDeliveryDate minus
+        manufactureLeadTimeDays business days), updatedAt (ISO string) }
+    Matched to a joinery-items.json record by the exact (level, room,
+    joineryId) triple -- the SAME identity joinery-status.json already
+    uses (findJoineryStatus), not a new matching scheme.
+
+  KNOWN, DISCLOSED LIMITATIONS (consistent with how this ecosystem has
+  handled the same gaps elsewhere):
+  - Business-day math (subtractBusinessDays below) skips Saturdays/Sundays
+    only -- no public-holiday calendar exists anywhere in this ecosystem,
+    so a lead time that spans a holiday will be a little optimistic.
+  - The plan viewer reads a Level's markers from its Floor Plans/<Level>.json
+    file. A LEGACY project that hasn't been opened once in Site Measure or
+    UTZLINE Projects since the 2026-09-22 "full flat structure" cutover
+    won't have that file yet -- its items still appear in both schedule
+    tables (joinery-items.json is unaffected), but "View on plan" /
+    right-click-to-schedule won't find a plan for it until it's opened
+    once in one of those apps. Since every active project has already been
+    through that cutover, this should not affect real usage today.
+  - Same (level, room, joineryId) collision caveat already documented
+    against joinery-status.json elsewhere in this family: if two items
+    ever collide on that exact triple, this app treats them as one, same
+    as the Joinery Register's own status lookup already does.
+
+  Accent color is blue/teal (#1f8fbf) -- the one hue not already used by a
+  sibling app (Site Measure/Viewer orange-red, Install ITP green,
+  Manufacture ITP purple, Projects crimson).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>UTZLINE Scheduler</title>
+<meta name="theme-color" content="#0e161a">
+<link rel="manifest" href="./manifest.json">
+<link rel="icon" href="./icons/icon-192.png">
+<link rel="apple-touch-icon" href="./icons/icon-192.png">
+<style>
+  :root{
+    --bg: #0e161a;
+    --panel: #142027;
+    --panel2: #1a2830;
+    --border: #263a44;
+    --text: #eaf3f6;
+    --muted: #9db3bc;
+    --muted2: #6f8b96;
+    --accent: #1f8fbf;
+    --accent-ink: #ffffff;
+    --accent-soft: #123241;
+    --danger: #ff5d5d;
+    --warn: #e0a12c;
+    --ok: #33c46a;
+    --radius: 12px;
+  }
+  *{ box-sizing: border-box; }
+  html, body{ height: 100%; }
+  body{
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, "IBM Plex Sans", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+  }
+  header{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    background: #101a1f;
+    flex: 0 0 auto;
+  }
+  header img{ width: 32px; height: 32px; border-radius: 8px; }
+  header .brand{ font-weight: 700; font-size: 17px; letter-spacing: 0.2px; }
+  header .brand small{ display:block; font-weight: 500; font-size: 11px; color: var(--muted); letter-spacing: 0.5px; }
+  main{
+    flex: 1 1 auto;
+    overflow-y: auto;
+    display: flex;
+    justify-content: center;
+    padding: 24px 16px 60px;
+  }
+  .screen{ width: 100%; max-width: 980px; }
+  .screen[hidden]{ display: none; }
+  .screen.narrow{ max-width: 640px; }
+  h1{ font-size: 20px; margin: 0 0 6px; }
+  p.sub{ color: var(--muted); margin: 0 0 20px; font-size: 14px; line-height: 1.5; }
+  .card{
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px;
+    margin-bottom: 14px;
+  }
+  .btn{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    background: var(--accent);
+    color: var(--accent-ink);
+    border: none;
+    border-radius: 10px;
+    padding: 11px 18px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+  }
+  .btn:hover{ filter: brightness(1.1); }
+  .btn.secondary{
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .btn.secondary:hover{ background: var(--panel2); }
+  .btn.link{
+    background: transparent;
+    color: var(--muted);
+    border: none;
+    padding: 6px 0;
+    font-size: 13px;
+    text-decoration: underline;
+  }
+  .btn.danger{ background: var(--danger); color: #fff; }
+  .btn.sm{ padding: 6px 10px; font-size: 12px; border-radius: 8px; }
+  .row{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .backrow{ margin-bottom: 16px; }
+  .list{ display: flex; flex-direction: column; gap: 8px; }
+  .list-item{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 13px 16px;
+    cursor: pointer;
+    text-align: left;
+    color: var(--text);
+    font-size: 15px;
+    width: 100%;
+  }
+  .list-item:hover{ background: var(--panel2); border-color: var(--accent); }
+  .list-item .chev{ color: var(--muted2); }
+  .empty-note{ color: var(--muted); font-size: 14px; padding: 18px 4px; text-align: center; }
+  .section-title{ font-size: 15px; margin: 0 0 8px; }
+  .hero-card{
+    background: linear-gradient(135deg, var(--accent-soft), var(--panel));
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 18px;
+    display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;
+  }
+  .hero-card h2{ margin: 0 0 4px; font-size: 17px; }
+  .hero-card p{ margin: 0; color: var(--muted); font-size: 13px; max-width: 460px; }
+
+  .field{ margin-bottom: 14px; }
+  .field label{ display:block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+  .field input[type=text], .field input[type=date], .field input[type=number], .field select{
+    width: 100%;
+    background: #0e161a;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+  .field input:focus, .field select:focus{ outline: none; border-color: var(--accent); }
+  .field .hint{ font-size: 11px; color: var(--muted2); margin-top: 4px; }
+  .field-row{ display: flex; gap: 12px; flex-wrap: wrap; }
+  .field-row .field{ flex: 1 1 180px; }
+
+  .modal-backdrop{
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 40;
+    padding: 16px;
+  }
+  .modal-backdrop[hidden]{ display: none; }
+  .modal{
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    width: 100%;
+    max-width: 460px;
+    max-height: 88vh;
+    overflow-y: auto;
+  }
+  .modal h2{ margin: 0 0 4px; font-size: 17px; }
+  .modal p.sub{ margin-bottom: 16px; }
+  .modal-actions{ display:flex; justify-content:space-between; align-items:center; gap: 10px; margin-top: 6px; }
+  .modal-actions .right{ display:flex; gap:10px; }
+  .computed-box{
+    background: #0e161a; border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; font-size: 14px; margin-bottom: 14px;
+  }
+  .computed-box .k{ color: var(--muted); font-size: 11px; display:block; margin-bottom: 3px; }
+  .computed-box .v{ font-weight: 700; font-size: 16px; }
+
+  /* filters bar */
+  .filters-bar{ display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  .filters-bar select, .filters-bar input[type=text]{
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text); padding: 8px 10px; font-size: 13px;
+  }
+  .filters-bar input[type=text]{ min-width: 180px; flex: 1 1 180px; }
+
+  /* schedule tables */
+  .table-scroll{ overflow-x: auto; }
+  .sched-table{ width: 100%; border-collapse: collapse; font-size: 13px; min-width: 900px; }
+  .sched-table th{
+    text-align: left; padding: 8px 10px; color: var(--muted); font-weight: 600;
+    border-bottom: 1px solid var(--border); cursor: pointer; user-select: none;
+    white-space: nowrap;
+  }
+  .sched-table th:hover{ color: var(--text); }
+  .sched-table th.sorted::after{ content: " \25B2"; font-size: 10px; }
+  .sched-table th.sorted.desc::after{ content: " \25BC"; }
+  .sched-table td{ padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; white-space: nowrap; }
+  .sched-table td.wrap{ white-space: normal; }
+  .sched-table tbody tr:last-child td{ border-bottom: none; }
+  .sched-table tbody tr:hover{ background: var(--panel2); }
+  .status-label{ display: inline-flex; align-items: center; gap: 6px; }
+  .status-label .status-icon{ font-size: 13px; }
+  .muted-cell{ color: var(--muted2); }
+  .delay-pill{
+    display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 700;
+  }
+  .delay-none{ background: #26333a; color: var(--muted); }
+  .delay-ontrack{ background: rgba(51,196,106,0.16); color: var(--ok); }
+  .delay-start{ background: rgba(224,161,44,0.18); color: var(--warn); }
+  .delay-delivery{ background: rgba(255,93,93,0.18); color: var(--danger); }
+  .row-actions{ display: flex; gap: 6px; }
+
+  /* plan canvas (read-only) -- fixed to escape main's centered/max-width layout */
+  .plan-canvas-screen{
+    position: fixed; inset: 0; z-index: 30;
+    width: auto; max-width: none;
+    display: flex; flex-direction: column;
+    background: #070d10;
+  }
+  .plan-canvas-screen[hidden]{ display: none; }
+  .plan-canvas-topbar{
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: #101a1f;
+  }
+  .plan-canvas-topbar span{ font-weight: 600; font-size: 14px; }
+  .plan-canvas-stage{ flex: 1 1 auto; position: relative; overflow: hidden; touch-action: none; }
+  .plan-canvas-stage svg{ display: block; width: 100%; height: 100%; cursor: grab; }
+  .plan-canvas-hint{
+    flex: 0 0 auto;
+    padding: 8px 14px;
+    font-size: 11px;
+    color: var(--muted);
+    text-align: center;
+    background: #101a1f;
+    border-top: 1px solid var(--border);
+  }
+  .marker-dot{ cursor: pointer; }
+  .marker-label{ font-size: 14px; font-weight: 600; pointer-events: none; user-select: none; }
+
+  #toast{
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%) translateY(20px);
+    background: #1a2830;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 18px;
+    border-radius: 10px;
+    font-size: 13px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s, transform 0.2s;
+    z-index: 50;
+    max-width: 90vw;
+    text-align: center;
+  }
+  #toast.show{ opacity: 1; transform: translateX(-50%) translateY(0); }
+  .error-note{ color: #ff8080; font-size: 13px; margin-top: 10px; }
+  .error-note[hidden]{ display: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <img src="./icons/icon-192.png" alt="">
+  <div class="brand">UTZLINE Scheduler<small>delivery &amp; manufacture dates</small></div>
+</header>
+
+<main>
+
+  <!-- ---- Setup: no Projects root chosen yet ---- -->
+  <section id="screenSetup" class="screen narrow">
+    <h1>Choose your Projects folder</h1>
+    <p class="sub">Pick the same top-level Projects folder used by UTZLINE Site Measure, Viewer, Install ITP, Manufacture ITP and Projects. Scheduler only reads their data -- the only thing it ever writes is its own new schedule file, one per project, alongside their existing files. Nothing about those apps changes.</p>
+    <button class="btn" id="chooseRootBtn">Choose Projects folder</button>
+    <p class="error-note" id="setupError" hidden></p>
+  </section>
+
+  <!-- ---- Reconnect: had a root before, permission lapsed ---- -->
+  <section id="screenReconnect" class="screen narrow">
+    <h1>Reconnect to your Projects folder</h1>
+    <p class="sub">Permission for "<span id="reconnectName"></span>" isn't active right now (this can happen after a browser restart). Reconnect to continue, or choose a different folder.</p>
+    <div class="row">
+      <button class="btn" id="reconnectBtn">Reconnect</button>
+      <button class="btn secondary" id="reconnectChooseDifferentBtn">Choose a different folder</button>
+    </div>
+  </section>
+
+  <!-- ---- Home: Overall Schedule + project list ---- -->
+  <section id="screenHome" class="screen">
+    <h1>Scheduler</h1>
+    <p class="sub">Set required delivery dates and manufacture lead times, and see what's on track, starting late, or overdue -- across every project, or one at a time.</p>
+    <div class="hero-card">
+      <div>
+        <h2>Overall Schedule</h2>
+        <p>Every scheduled (and unscheduled) joinery item, across every project, in one sortable table.</p>
+      </div>
+      <button class="btn" id="openOverallScheduleBtn">Open Overall Schedule</button>
+    </div>
+    <div class="section-title">Projects</div>
+    <div class="list" id="homeProjectListItems"></div>
+    <div class="empty-note" id="homeProjectListEmpty" hidden>No projects found in this folder.</div>
+    <p style="margin-top:16px;"><button class="btn link" id="chooseDifferentRootBtn">Choose a different Projects folder</button></p>
+  </section>
+
+  <!-- ---- Overall Schedule (cross-project) ---- -->
+  <section id="screenOverall" class="screen">
+    <div class="row backrow">
+      <button class="btn secondary sm" id="backFromOverallBtn">&larr; Home</button>
+      <h1 style="margin:0;">Overall Schedule</h1>
+    </div>
+    <div class="filters-bar">
+      <select id="overallProjectFilter"><option value="">All projects</option></select>
+      <select id="overallStatusFilter">
+        <option value="">All statuses</option>
+        <option value="__created__">Created</option>
+        <option value="measured">Check measured</option>
+        <option value="in_manufacture">In manufacture</option>
+        <option value="manufactured">Ready to dispatch</option>
+        <option value="delivered">Delivered</option>
+        <option value="installed">Installed</option>
+      </select>
+      <select id="overallDelayFilter">
+        <option value="">Any delay status</option>
+        <option value="delivery">Delivery overdue</option>
+        <option value="start">Manufacture start overdue</option>
+        <option value="ontrack">On track</option>
+        <option value="none">No schedule set</option>
+      </select>
+      <input type="text" id="overallSearchInput" placeholder="Search ID, description, or work order #">
+      <button class="btn secondary sm" id="refreshOverallBtn">Refresh</button>
+    </div>
+    <div class="card" id="overallLoadingCard">
+      <p class="sub" style="margin:0;">Reading every project...</p>
+    </div>
+    <div class="card table-scroll" id="overallTableCard" hidden>
+      <table class="sched-table" id="overallTable">
+        <thead>
+          <tr>
+            <th data-col="project">Project</th>
+            <th data-col="level">Level</th>
+            <th data-col="room">Room</th>
+            <th data-col="joineryId">Joinery ID</th>
+            <th data-col="description">Description</th>
+            <th data-col="workOrderNo">Work order #</th>
+            <th data-col="requiredDeliveryDate">Required delivery</th>
+            <th data-col="manufactureStartDate">Manufacture start</th>
+            <th data-col="leadTime">Lead time</th>
+            <th data-col="status">Status</th>
+            <th data-col="delay">Delay</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="overallTableBody"></tbody>
+      </table>
+      <div class="empty-note" id="overallEmpty" hidden>No items match these filters.</div>
+      <div class="empty-note" id="overallEmptyAll" hidden>No joinery items found in any project yet.</div>
+    </div>
+  </section>
+
+  <!-- ---- Per-project Schedule ---- -->
+  <section id="screenProjectSchedule" class="screen">
+    <div class="row backrow">
+      <button class="btn secondary sm" id="backFromProjectScheduleBtn">&larr; Home</button>
+      <h1 id="projectScheduleTitle" style="margin:0;">Project</h1>
+    </div>
+    <div class="card row" id="levelPlanRow">
+      <span class="section-title" style="margin:0;">Open a level's plan:</span>
+      <select id="levelPlanSelect"></select>
+      <button class="btn secondary sm" id="openLevelPlanBtn">Open plan</button>
+      <span class="sub" style="margin:0; font-size:12px;">Right-click (or long-press) a marker on the plan to set its schedule.</span>
+    </div>
+    <div class="filters-bar">
+      <select id="projLevelFilter"><option value="">All levels</option></select>
+      <select id="projStatusFilter">
+        <option value="">All statuses</option>
+        <option value="__created__">Created</option>
+        <option value="measured">Check measured</option>
+        <option value="in_manufacture">In manufacture</option>
+        <option value="manufactured">Ready to dispatch</option>
+        <option value="delivered">Delivered</option>
+        <option value="installed">Installed</option>
+      </select>
+      <select id="projDelayFilter">
+        <option value="">Any delay status</option>
+        <option value="delivery">Delivery overdue</option>
+        <option value="start">Manufacture start overdue</option>
+        <option value="ontrack">On track</option>
+        <option value="none">No schedule set</option>
+      </select>
+      <input type="text" id="projSearchInput" placeholder="Search ID, description, or work order #">
+    </div>
+    <div class="card table-scroll">
+      <table class="sched-table" id="projTable">
+        <thead>
+          <tr>
+            <th data-col="level">Level</th>
+            <th data-col="room">Room</th>
+            <th data-col="joineryId">Joinery ID</th>
+            <th data-col="description">Description</th>
+            <th data-col="workOrderNo">Work order #</th>
+            <th data-col="requiredDeliveryDate">Required delivery</th>
+            <th data-col="manufactureStartDate">Manufacture start</th>
+            <th data-col="leadTime">Lead time</th>
+            <th data-col="status">Status</th>
+            <th data-col="delay">Delay</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="projTableBody"></tbody>
+      </table>
+      <div class="empty-note" id="projEmpty" hidden>No items match these filters.</div>
+      <div class="empty-note" id="projEmptyAll" hidden>No joinery items in this project yet.</div>
+    </div>
+  </section>
+
+  <div id="toast"></div>
+
+</main>
+
+<!-- ---- Read-only plan canvas ---- -->
+<section id="screenPlanCanvas" class="plan-canvas-screen" hidden>
+  <div class="plan-canvas-topbar">
+    <button class="btn secondary sm" id="backFromPlanCanvasBtn">&larr; Back</button>
+    <span id="planCanvasTitle"></span>
+  </div>
+  <div class="plan-canvas-stage" id="planCanvasStageWrap">
+    <svg id="planCanvasSvg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
+      <g id="planCanvasWorld">
+        <g id="planCanvasTiles"></g>
+        <g id="planCanvasMarkers"></g>
+      </g>
+    </svg>
+  </div>
+  <div class="plan-canvas-hint">Read-only plan. Right-click a marker (or press and hold, on touch) to set its delivery date and lead time. Tap a marker for a quick status summary.</div>
+</section>
+
+<!-- ---- Set Schedule modal ---- -->
+<div class="modal-backdrop" id="scheduleModalBackdrop" hidden>
+  <div class="modal">
+    <h2 id="scheduleModalTitle">Set schedule</h2>
+    <p class="sub" id="scheduleModalSub"></p>
+    <div class="field">
+      <label for="schedDeliveryInput">Required delivery date</label>
+      <input type="date" id="schedDeliveryInput">
+    </div>
+    <div class="field">
+      <label for="schedLeadTimeInput">Manufacture lead time (business days)</label>
+      <input type="number" id="schedLeadTimeInput" min="0" step="1" value="30">
+      <div class="hint">Defaults to 30 business days. Counts weekdays only (Mon-Fri) -- no public-holiday calendar exists in this app yet.</div>
+    </div>
+    <div class="computed-box">
+      <span class="k">Computed manufacture start date</span>
+      <span class="v" id="schedComputedStart">--</span>
+    </div>
+    <p class="error-note" id="scheduleModalError" hidden></p>
+    <div class="modal-actions">
+      <button class="btn danger sm" id="schedClearBtn" hidden>Clear schedule</button>
+      <div class="right">
+        <button class="btn secondary" id="schedCancelBtn">Cancel</button>
+        <button class="btn" id="schedSaveBtn">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ============================== toast ============================== */
+  var toastEl = document.getElementById("toast");
+  function showToast(msg, durationMs){
+    toastEl.textContent = msg;
+    toastEl.classList.add("show");
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(function(){ toastEl.classList.remove("show"); }, durationMs || 2600);
+  }
+
+  function escapeHtml(s){
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  /* ============================== own IndexedDB (session state only) ==============================
+     Own database, own name -- deliberately separate from every other app's
+     own IndexedDB ("redline-db"/"session", "utzline-projects-db", etc.),
+     same one-database-per-app pattern already established across the
+     family. Only ever holds this app's own Projects-root folder handle. */
+  var DB_NAME = "utzline-scheduler-db", STORE = "session";
+  function idbOpen(){
+    return new Promise(function(res, rej){
+      try{
+        var r = indexedDB.open(DB_NAME, 1);
+        r.onupgradeneeded = function(){ r.result.createObjectStore(STORE); };
+        r.onsuccess = function(){ res(r.result); };
+        r.onerror = function(){ rej(r.error); };
+      }catch(e){ rej(e); }
+    });
+  }
+  function idbSet(key, val){
+    return idbOpen().then(function(db){
+      return new Promise(function(res, rej){
+        var tx = db.transaction(STORE, "readwrite");
+        tx.objectStore(STORE).put(val, key);
+        tx.oncomplete = function(){ res(); };
+        tx.onerror = function(){ rej(tx.error); };
+      });
+    });
+  }
+  function idbGet(key){
+    return idbOpen().then(function(db){
+      return new Promise(function(res, rej){
+        var tx = db.transaction(STORE, "readonly");
+        var rq = tx.objectStore(STORE).get(key);
+        rq.onsuccess = function(){ res(rq.result); };
+        rq.onerror = function(){ rej(rq.error); };
+      });
+    });
+  }
+
+  /* ============================== folder shape / listing ==============================
+     Copied verbatim from UTZLINE Projects' own detectFolderShape/
+     listSubdirNames/isProjectShaped, so this app's Projects-root picker
+     can never quietly drift from what every other app in the family
+     already expects a "root" vs. a "project" folder to look like. */
+  function listSubdirNames(dirHandle){
+    if (!dirHandle || typeof dirHandle.values !== "function") return Promise.resolve([]);
+    var names = [];
+    var iter = dirHandle.values();
+    function step(){
+      return iter.next().then(function(res){
+        if (res.done) return names;
+        if (res.value && res.value.kind === "directory") names.push(res.value.name);
+        return step();
+      });
+    }
+    return step().then(function(list){
+      list.sort(function(a, b){ return a.localeCompare(b, undefined, { sensitivity: "base" }); });
+      return list;
+    });
+  }
+  function anySubfolderMatches(dirHandle, names, predicate, i){
+    i = i || 0;
+    if (i >= names.length) return Promise.resolve(false);
+    return dirHandle.getDirectoryHandle(names[i]).then(function(childHandle){
+      return predicate(childHandle);
+    }).catch(function(){ return false; }).then(function(matched){
+      if (matched) return true;
+      return anySubfolderMatches(dirHandle, names, predicate, i + 1);
+    });
+  }
+  function isProjectShaped(dirHandle){
+    return dirHandle.getFileHandle("project-meta.json").then(function(){ return true; }, function(){
+      return dirHandle.getFileHandle("joinery-items.json").then(function(){ return true; }, function(){
+        return dirHandle.getDirectoryHandle(projectSavesDirName()).then(function(){ return true; }, function(){ return false; });
+      });
+    });
+  }
+  function detectFolderShape(dirHandle){
+    return isProjectShaped(dirHandle).then(function(isProject){
+      if (isProject) return "project";
+      return listSubdirNames(dirHandle).then(function(names){
+        if (!names.length) return "empty";
+        return anySubfolderMatches(dirHandle, names, isProjectShaped).then(function(hasProjectChild){
+          return hasProjectChild ? "root" : "unknown";
+        });
+      });
+    });
+  }
+  function listExistingProjects(rootHandle){ return listSubdirNames(rootHandle); }
+
+  function sanitizeFileBase(name){
+    var cleaned = String(name || "")
+      .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
+      .trim()
+      .replace(/^[._]+|[._\s]+$/g, "");
+    return cleaned.slice(0, 120) || "plan";
+  }
+  function projectSavesDirName(){ return "Project Saves"; }
+  function floorPlansDirName(){ return "Floor Plans"; }
+  function getFloorPlansDir(projectHandle){
+    return projectHandle.getDirectoryHandle(projectSavesDirName(), { create: false }).then(function(psH){
+      return psH.getDirectoryHandle(floorPlansDirName(), { create: false });
+    });
+  }
+  function levelFileName(projectName, levelName){
+    return sanitizeFileBase(projectName) + " - " + sanitizeFileBase(levelName) + ".json";
+  }
+  // Read-only: this app never creates "Project Saves/Floor Plans/" itself
+  // (create:false throughout) -- a project with no plans saved yet, or a
+  // legacy project not yet migrated by Site Measure/Projects, just reads
+  // as having no levels here (a disclosed limitation -- see top-of-file
+  // comment).
+  function readLevelFileByName(projectHandle, fname){
+    return getFloorPlansDir(projectHandle).then(function(dirH){
+      return dirH.getFileHandle(fname);
+    }).then(function(fh){
+      return fh.getFile();
+    }).then(function(file){
+      return file.text();
+    }).then(function(text){
+      try{
+        var parsed = JSON.parse(text);
+        if (!parsed || typeof parsed !== "object" || !parsed.name) return null;
+        return {
+          name: parsed.name,
+          imageDataURL: parsed.imageDataURL || null,
+          imageTiles: parsed.imageTiles || null,
+          imageW: parsed.imageW || 0,
+          imageH: parsed.imageH || 0,
+          markers: Array.isArray(parsed.markers) ? parsed.markers : []
+        };
+      }catch(e){ return null; }
+    }, function(){ return null; });
+  }
+  function readLevelFile(projectHandle, projectName, levelName){
+    if (!projectHandle) return Promise.resolve(null);
+    return readLevelFileByName(projectHandle, levelFileName(projectName, levelName));
+  }
+  function listLevelFiles(projectHandle){
+    return getFloorPlansDir(projectHandle).then(function(dirH){
+      var fnames = [];
+      var iter = dirH.values();
+      function step(){
+        return iter.next().then(function(res){
+          if (res.done) return fnames;
+          if (res.value && res.value.kind === "file" && /\.json$/i.test(res.value.name)) fnames.push(res.value.name);
+          return step();
+        });
+      }
+      return step();
+    }, function(){ return []; }).then(function(fnames){
+      return fnames.reduce(function(chain, fname){
+        return chain.then(function(acc){
+          return readLevelFileByName(projectHandle, fname).then(function(level){
+            if (level) acc.push(level);
+            return acc;
+          });
+        });
+      }, Promise.resolve([]));
+    });
+  }
+  function listExistingLevels(projectHandle){
+    return listLevelFiles(projectHandle).then(function(levels){
+      return levels.map(function(l){ return l.name; }).sort(function(a, b){ return a.localeCompare(b, undefined, { sensitivity: "base" }); });
+    });
+  }
+
+  /* ============================== joinery items (read-only) ============================== */
+  function readJoineryItems(projectHandle){
+    if (!projectHandle) return Promise.resolve([]);
+    return projectHandle.getFileHandle("joinery-items.json", { create: false }).then(function(fh){
+      return fh.getFile();
+    }).then(function(file){
+      return file.text();
+    }).then(function(text){
+      try{ var arr = JSON.parse(text); return Array.isArray(arr) ? arr : []; }catch(e){ return []; }
+    }, function(){ return []; });
+  }
+
+  /* ============================== shared joinery-status pipeline (read-only) ==============================
+     Copied verbatim from UTZLINE Projects / source.html / both ITP apps.
+     This app never writes joinery-status.json -- Site Measure's own "Mark
+     as check measured", and each ITP's own checklist sign-off/open, are
+     still the only writers anywhere in the family. */
+  function joineryStatusRank(status){
+    switch (status){
+      case "installed": return 5;
+      case "delivered": return 4;
+      case "manufactured": return 3;
+      case "in_manufacture": return 2;
+      case "measured": return 1;
+      default: return 0;
+    }
+  }
+  function joineryStatusLabel(status){
+    switch (status){
+      case "installed": return "Installed";
+      case "delivered": return "Delivered";
+      case "manufactured": return "Ready to dispatch";
+      case "in_manufacture": return "In manufacture";
+      case "measured": return "Check measured";
+      default: return "Created";
+    }
+  }
+  function joineryStatusIcon(status){
+    switch (status){
+      case "installed": return "🏆";
+      case "delivered": return "🚚";
+      case "manufactured": return "📦";
+      case "in_manufacture": return "🏭";
+      case "measured": return "📏";
+      default: return "";
+    }
+  }
+  function readJoineryStatuses(projectHandle){
+    if (!projectHandle) return Promise.resolve([]);
+    return projectHandle.getFileHandle("joinery-status.json", { create: false }).then(function(fh){
+      return fh.getFile();
+    }).then(function(file){
+      return file.text();
+    }).then(function(text){
+      try{ var arr = JSON.parse(text); return Array.isArray(arr) ? arr : []; }catch(e){ return []; }
+    }, function(){ return []; });
+  }
+  function findJoineryStatus(list, level, room, joineryId){
+    for (var i = 0; i < list.length; i++){
+      var rec = list[i];
+      if (rec && rec.level === level && (rec.room || "") === (room || "") && (rec.joineryId || "") === (joineryId || "")) return rec;
+    }
+    return null;
+  }
+  function statusLabelHtml(statusKey){
+    var icon = joineryStatusIcon(statusKey);
+    return "<span class=\"status-label\">" + (icon ? "<span class=\"status-icon\">" + icon + "</span>" : "") + escapeHtml(joineryStatusLabel(statusKey)) + "</span>";
+  }
+
+  /* ============================== this app's OWN schedule file ==============================
+     "joinery-schedule.json" -- a sibling of joinery-items.json/
+     joinery-status.json, but owned exclusively by THIS app: no other app
+     in the family reads or writes it. One record per scheduled item,
+     matched by the exact same (level, room, joineryId) triple
+     joinery-status.json already uses. */
+  function joineryScheduleFilename(){ return "joinery-schedule.json"; }
+  function readJoinerySchedule(projectHandle){
+    if (!projectHandle) return Promise.resolve([]);
+    return projectHandle.getFileHandle(joineryScheduleFilename(), { create: false }).then(function(fh){
+      return fh.getFile();
+    }).then(function(file){
+      return file.text();
+    }).then(function(text){
+      try{ var arr = JSON.parse(text); return Array.isArray(arr) ? arr : []; }catch(e){ return []; }
+    }, function(){ return []; });
+  }
+  function writeJoinerySchedule(projectHandle, list){
+    return projectHandle.getFileHandle(joineryScheduleFilename(), { create: true }).then(function(fh){
+      return fh.createWritable();
+    }).then(function(w){
+      return w.write(JSON.stringify(list)).then(function(){ return w.close(); });
+    });
+  }
+  function findScheduleRecord(list, level, room, joineryId){
+    for (var i = 0; i < list.length; i++){
+      var rec = list[i];
+      if (rec && rec.level === level && (rec.room || "") === (room || "") && (rec.joineryId || "") === (joineryId || "")) return rec;
+    }
+    return null;
+  }
+
+  /* ============================== business-day date math ==============================
+     "this gives a manufacture start date that is the delivery date - the
+     manufacture lead time" (in business days). Walks back one calendar
+     day at a time, only counting Mon-Fri against the remaining lead time,
+     until it's used up -- the result always lands on a weekday. DISCLOSED
+     LIMITATION: no public-holiday calendar exists anywhere in this
+     ecosystem, so this is pure Mon-Fri math, not holiday-aware. Dates are
+     plain "YYYY-MM-DD" strings throughout (no time-of-day), so UTC is used
+     purely as a stable, DST-free calendar to walk -- it never represents
+     an actual moment in time. */
+  function isWeekendUTC(d){ var wd = d.getUTCDay(); return wd === 0 || wd === 6; }
+  function subtractBusinessDays(dateStr, days){
+    if (!dateStr) return "";
+    var d = new Date(dateStr + "T00:00:00Z");
+    if (isNaN(d.getTime())) return "";
+    var remaining = Math.max(0, parseInt(days, 10) || 0);
+    while (remaining > 0){
+      d.setUTCDate(d.getUTCDate() - 1);
+      if (!isWeekendUTC(d)) remaining--;
+    }
+    return d.toISOString().slice(0, 10);
+  }
+  // "Today", as a plain local calendar date -- this is what a delay flag
+  // should be judged against (the day the person viewing this is actually
+  // living in), not a UTC day that might already differ from it.
+  function todayDateStr(){
+    var d = new Date();
+    var mm = String(d.getMonth() + 1);
+    var dd = String(d.getDate());
+    if (mm.length < 2) mm = "0" + mm;
+    if (dd.length < 2) dd = "0" + dd;
+    return d.getFullYear() + "-" + mm + "-" + dd;
+  }
+  function formatDateDisplay(dateStr){
+    if (!dateStr) return "";
+    var d = new Date(dateStr + "T00:00:00Z");
+    if (isNaN(d.getTime())) return dateStr;
+    try{
+      return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
+    }catch(e){ return dateStr; }
+  }
+
+  /* ============================== delay flagging (disclosed design call) ==============================
+     Andrew asked only that the app "flags any delays" -- the exact rule
+     wasn't specified, so this is Claude's own design call, disclosed here
+     and in next-version-notes.md:
+       - No schedule set at all  -> "No schedule set" (neutral, not a delay)
+       - today > requiredDeliveryDate AND status not yet "installed"
+             -> "Delivery overdue" (most severe -- "delivered" is a
+                reserved-but-currently-unreachable stage in the shared
+                pipeline, same as everywhere else in this family, so
+                "installed" is treated as the real completion marker)
+       - else today > manufactureStartDate AND status not yet
+             "in_manufacture" or later -> "Manufacture start overdue"
+       - else -> "On track" */
+  function computeDelayInfo(scheduleRec, statusKey, todayStr){
+    if (!scheduleRec || !scheduleRec.requiredDeliveryDate){
+      return { key: "none", label: "No schedule set", severity: 0 };
+    }
+    var rank = joineryStatusRank(statusKey);
+    if (todayStr > scheduleRec.requiredDeliveryDate && rank < 5){
+      return { key: "delivery", label: "Delivery overdue", severity: 3 };
+    }
+    if (scheduleRec.manufactureStartDate && todayStr > scheduleRec.manufactureStartDate && rank < 2){
+      return { key: "start", label: "Manufacture start overdue", severity: 2 };
+    }
+    return { key: "ontrack", label: "On track", severity: 1 };
+  }
+
+  /* ============================== roomlink markers / plan viewer (read-only) ==============================
+     Rendering/hit-testing logic copied verbatim from UTZLINE Projects' own
+     plan canvas (planApplyTransform/planFitToView/planClientToWorld/
+     planZoomAt/planRenderTiles/planRenderMarkers/planMarkerAt and the
+     pointer-based pan/pinch/tap handling), so this app's own plan view
+     looks and feels identical -- this app never creates, edits, or moves a
+     marker, it only reads and displays them, then opens its own Set
+     Schedule dialog on a right-click/long-press hit. */
+  function roomlinkDisplayText(obj){
+    return obj.joineryCode || obj.roomName || "";
+  }
+  var planCanvasScreen = document.getElementById("screenPlanCanvas");
+  var planCanvasSvg = document.getElementById("planCanvasSvg");
+  var planCanvasStageWrap = document.getElementById("planCanvasStageWrap");
+  var planCanvasTilesG = document.getElementById("planCanvasTiles");
+  var planCanvasMarkersG = document.getElementById("planCanvasMarkers");
+  var planCanvasTitle = document.getElementById("planCanvasTitle");
+  var backFromPlanCanvasBtn = document.getElementById("backFromPlanCanvasBtn");
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  var planView = { tx: 0, ty: 0, scale: 1 };
+  var planImageW = 0, planImageH = 0;
+  var planSaved = null;
+  var planReturnScreen = "home";
+  var planActiveProjectHandle = null, planActiveProjectName = "", planActiveLevelName = "";
+
+  function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+
+  function planApplyTransform(){
+    document.getElementById("planCanvasWorld").setAttribute("transform", "translate(" + planView.tx + " " + planView.ty + ") scale(" + planView.scale + ")");
+  }
+  function planFitToView(){
+    var w = planCanvasStageWrap.clientWidth, h = planCanvasStageWrap.clientHeight;
+    if (!planImageW || !planImageH || !w || !h) return;
+    var scale = Math.min(w / planImageW, h / planImageH) * 0.94;
+    planView.scale = scale;
+    planView.tx = (w - planImageW * scale) / 2;
+    planView.ty = (h - planImageH * scale) / 2;
+    planApplyTransform();
+  }
+  function planClientToWorld(clientX, clientY){
+    var r = planCanvasSvg.getBoundingClientRect();
+    var sx = clientX - r.left, sy = clientY - r.top;
+    return { x: (sx - planView.tx) / planView.scale, y: (sy - planView.ty) / planView.scale };
+  }
+  function planZoomAt(clientX, clientY, newScale){
+    var r = planCanvasSvg.getBoundingClientRect();
+    var sx = clientX - r.left, sy = clientY - r.top;
+    var world = { x: (sx - planView.tx) / planView.scale, y: (sy - planView.ty) / planView.scale };
+    planView.scale = clamp(newScale, 0.05, 20);
+    planView.tx = sx - world.x * planView.scale;
+    planView.ty = sy - world.y * planView.scale;
+    planApplyTransform();
+  }
+  function planRenderTiles(){
+    while (planCanvasTilesG.firstChild) planCanvasTilesG.removeChild(planCanvasTilesG.firstChild);
+    if (!planSaved) return;
+    if (planSaved.imageTiles && planSaved.imageTiles.length){
+      planSaved.imageTiles.forEach(function(t){
+        var img = document.createElementNS(SVG_NS, "image");
+        img.setAttributeNS(null, "href", t.dataUrl);
+        img.setAttribute("x", t.x); img.setAttribute("y", t.y);
+        img.setAttribute("width", t.w); img.setAttribute("height", t.h);
+        planCanvasTilesG.appendChild(img);
+      });
+    } else if (planSaved.imageDataURL){
+      var img2 = document.createElementNS(SVG_NS, "image");
+      img2.setAttributeNS(null, "href", planSaved.imageDataURL);
+      img2.setAttribute("x", 0); img2.setAttribute("y", 0);
+      img2.setAttribute("width", planImageW); img2.setAttribute("height", planImageH);
+      planCanvasTilesG.appendChild(img2);
+    }
+  }
+  function planRenderMarkers(){
+    while (planCanvasMarkersG.firstChild) planCanvasMarkersG.removeChild(planCanvasMarkersG.firstChild);
+    if (!planSaved || !planSaved.objects) return;
+    planSaved.objects.forEach(function(obj){
+      if (obj.type !== "roomlink") return;
+      var dot = document.createElementNS(SVG_NS, "circle");
+      dot.setAttribute("class", "marker-dot");
+      dot.setAttribute("cx", obj.x); dot.setAttribute("cy", obj.y); dot.setAttribute("r", obj.r);
+      dot.setAttribute("fill", obj.color || "#1f8fbf");
+      dot.setAttribute("stroke", "#fff"); dot.setAttribute("stroke-width", Math.max(1, obj.r * 0.08));
+      dot.setAttribute("data-marker-id", obj.id);
+      planCanvasMarkersG.appendChild(dot);
+      if (obj.label && obj.label.text){
+        var text = document.createElementNS(SVG_NS, "text");
+        text.setAttribute("class", "marker-label");
+        text.setAttribute("x", obj.label.x); text.setAttribute("y", obj.label.y);
+        text.setAttribute("text-anchor", obj.label.anchor || "middle");
+        text.setAttribute("fill", obj.label.color || "#fff");
+        text.setAttribute("font-size", obj.label.fontSize || 32);
+        text.setAttribute("paint-order", "stroke");
+        text.setAttribute("stroke", "#0b0707");
+        text.setAttribute("stroke-width", "4");
+        text.textContent = roomlinkDisplayText(obj);
+        planCanvasMarkersG.appendChild(text);
+      }
+    });
+  }
+  function planMarkerAt(worldX, worldY){
+    if (!planSaved || !planSaved.objects) return null;
+    var hitR = 28 / planView.scale;
+    var best = null, bestDist = Infinity;
+    planSaved.objects.forEach(function(obj){
+      if (obj.type !== "roomlink") return;
+      var d = Math.hypot(obj.x - worldX, obj.y - worldY);
+      if (d <= Math.max(obj.r, hitR) && d < bestDist){ best = obj; bestDist = d; }
+    });
+    return best;
+  }
+
+  var planPointers = {};
+  var planDownPoint = null, planDragMoved = false, planPinchLastDist = null;
+  // Long-press-to-schedule (touch equivalent of a desktop right-click,
+  // since a touch device has no native contextmenu gesture). 550ms, same
+  // ballpark as a typical OS long-press threshold.
+  var LONG_PRESS_MS = 550;
+  var planLongPressTimer = null, planLongPressFired = false;
+  function clearLongPressTimer(){
+    if (planLongPressTimer){ clearTimeout(planLongPressTimer); planLongPressTimer = null; }
+  }
+  planCanvasSvg.addEventListener("pointerdown", function(e){
+    planPointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+    try{ planCanvasSvg.setPointerCapture(e.pointerId); }catch(err){}
+    var n = Object.keys(planPointers).length;
+    if (n === 1){
+      planDownPoint = { x: e.clientX, y: e.clientY };
+      planDragMoved = false;
+      planLongPressFired = false;
+      clearLongPressTimer();
+      var startX = e.clientX, startY = e.clientY;
+      planLongPressTimer = setTimeout(function(){
+        if (planDragMoved) return;
+        planLongPressFired = true;
+        var world = planClientToWorld(startX, startY);
+        onPlanRightClickOrLongPress(world.x, world.y);
+      }, LONG_PRESS_MS);
+    } else {
+      planPinchLastDist = null;
+      clearLongPressTimer();
+    }
+  });
+  planCanvasSvg.addEventListener("pointermove", function(e){
+    if (!planPointers[e.pointerId]) return;
+    var prev = planPointers[e.pointerId];
+    var dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+    planPointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+    var ids = Object.keys(planPointers);
+    if (ids.length === 1){
+      if (Math.abs(e.clientX - planDownPoint.x) > 4 || Math.abs(e.clientY - planDownPoint.y) > 4){
+        planDragMoved = true;
+        clearLongPressTimer();
+      }
+      planView.tx += dx; planView.ty += dy;
+      planApplyTransform();
+    } else if (ids.length === 2){
+      clearLongPressTimer();
+      var pts = ids.map(function(id){ return planPointers[id]; });
+      var dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      var mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+      if (planPinchLastDist){
+        planZoomAt(mid.x, mid.y, planView.scale * (dist / planPinchLastDist));
+      }
+      planPinchLastDist = dist;
+      planDragMoved = true;
+    }
+  });
+  function planPointerEnd(e){
+    clearLongPressTimer();
+    var wasSingleTap = Object.keys(planPointers).length === 1 && !planDragMoved && !planLongPressFired;
+    var tapClient = planDownPoint;
+    delete planPointers[e.pointerId];
+    if (Object.keys(planPointers).length < 2) planPinchLastDist = null;
+    if (wasSingleTap && tapClient){
+      var world = planClientToWorld(tapClient.x, tapClient.y);
+      onPlanTap(world.x, world.y);
+    }
+  }
+  planCanvasSvg.addEventListener("pointerup", planPointerEnd);
+  planCanvasSvg.addEventListener("pointercancel", function(e){ clearLongPressTimer(); delete planPointers[e.pointerId]; planPinchLastDist = null; });
+  planCanvasSvg.addEventListener("wheel", function(e){
+    e.preventDefault();
+    var factor = Math.pow(1.0015, -e.deltaY);
+    planZoomAt(e.clientX, e.clientY, planView.scale * factor);
+  }, { passive: false });
+  // Real right-click, for desktop -- exactly what Andrew asked for
+  // ("the dates are set by right clicking on your joinery plan").
+  planCanvasSvg.addEventListener("contextmenu", function(e){
+    e.preventDefault();
+    clearLongPressTimer();
+    var world = planClientToWorld(e.clientX, e.clientY);
+    onPlanRightClickOrLongPress(world.x, world.y);
+  });
+
+  function planFindItemForMarker(hit){
+    return readJoineryItems(planActiveProjectHandle).then(function(items){
+      return items.filter(function(it){
+        return it.level === planActiveLevelName && it.room === (hit.roomName || "") && it.joineryId === (hit.joineryCode || "");
+      })[0] || null;
+    });
+  }
+  // A plain tap/click: a quick, read-only glance at the item's current
+  // status + schedule -- editing always goes through right-click/long-press
+  // (or the table's own "Edit schedule" button), never a plain tap.
+  function onPlanTap(worldX, worldY){
+    var hit = planMarkerAt(worldX, worldY);
+    if (!hit){ return; }
+    planFindItemForMarker(hit).then(function(item){
+      if (!item){ showToast((hit.roomName || "") + (hit.joineryCode ? " · " + hit.joineryCode : "") + " — no matching item record found."); return; }
+      return Promise.all([readJoineryStatuses(planActiveProjectHandle), readJoinerySchedule(planActiveProjectHandle)]).then(function(res){
+        var statusKey = (findJoineryStatus(res[0], item.level, item.room, item.joineryId) || {}).status || "";
+        var schedRec = findScheduleRecord(res[1], item.level, item.room, item.joineryId);
+        var label = (item.joineryId || item.room || "Item") + (item.workOrderNo ? " (WO " + item.workOrderNo + ")" : "") + " — " + joineryStatusLabel(statusKey);
+        if (schedRec && schedRec.requiredDeliveryDate){
+          label += " · delivery " + formatDateDisplay(schedRec.requiredDeliveryDate);
+        } else {
+          label += " · no schedule set (right-click to add)";
+        }
+        showToast(label, 3400);
+      });
+    });
+  }
+  function onPlanRightClickOrLongPress(worldX, worldY){
+    var hit = planMarkerAt(worldX, worldY);
+    if (!hit){ return; }
+    planFindItemForMarker(hit).then(function(item){
+      if (!item){ showToast((hit.roomName || "") + (hit.joineryCode ? " · " + hit.joineryCode : "") + " — no matching item record found."); return; }
+      openScheduleModal(planActiveProjectHandle, planActiveProjectName, item, function(){
+        // Re-render the plan markers (no visual change needed today, but
+        // keeps this hook ready) and, more importantly, whichever table
+        // screen we came from, so it reflects the just-saved schedule the
+        // moment the visitor navigates back.
+        if (planReturnScreen === "overall") loadOverallSchedule();
+        else if (planReturnScreen === "projectSchedule") loadProjectSchedule(planActiveProjectHandle, planActiveProjectName);
+      });
+    });
+  }
+
+  function openPlanCanvasForLevel(projectHandle, projectName, levelName, returnScreen){
+    planActiveProjectHandle = projectHandle;
+    planActiveProjectName = projectName;
+    planActiveLevelName = levelName;
+    planReturnScreen = returnScreen || "home";
+    planCanvasTitle.textContent = projectName + " — " + levelName;
+    planCanvasScreen.hidden = false;
+    return readLevelFile(projectHandle, projectName, levelName).then(function(level){
+      var markers = level ? level.markers || [] : [];
+      planSaved = {
+        imageDataURL: level ? level.imageDataURL : null,
+        imageTiles: level ? level.imageTiles : null,
+        imageW: level ? level.imageW : 0,
+        imageH: level ? level.imageH : 0,
+        objects: markers.slice()
+      };
+      planImageW = planSaved.imageW || 0;
+      planImageH = planSaved.imageH || 0;
+      planRenderTiles();
+      planRenderMarkers();
+      requestAnimationFrame(function(){
+        planFitToView();
+      });
+      if (!level){
+        showToast("No saved plan found for this level yet.");
+      } else if (!planImageW || !planImageH){
+        showToast("This level has no floor plan image yet.");
+      }
+    }).catch(function(err){
+      console.error("Opening level plan failed:", err);
+      showToast("Couldn't open this level's plan.");
+    });
+  }
+  backFromPlanCanvasBtn.addEventListener("click", function(){
+    planCanvasScreen.hidden = true;
+    planSaved = null;
+    if (planReturnScreen === "overall") showScreen("overall");
+    else if (planReturnScreen === "projectSchedule") showScreen("projectSchedule");
+    else showScreen("home");
+  });
+
+  /* ============================== Set Schedule modal ============================== */
+  var scheduleModalBackdrop = document.getElementById("scheduleModalBackdrop");
+  var scheduleModalTitle = document.getElementById("scheduleModalTitle");
+  var scheduleModalSub = document.getElementById("scheduleModalSub");
+  var schedDeliveryInput = document.getElementById("schedDeliveryInput");
+  var schedLeadTimeInput = document.getElementById("schedLeadTimeInput");
+  var schedComputedStart = document.getElementById("schedComputedStart");
+  var scheduleModalError = document.getElementById("scheduleModalError");
+  var schedClearBtn = document.getElementById("schedClearBtn");
+  var schedCancelBtn = document.getElementById("schedCancelBtn");
+  var schedSaveBtn = document.getElementById("schedSaveBtn");
+  var DEFAULT_LEAD_TIME_DAYS = 30;
+  var scheduleModalCtx = null; // { projectHandle, projectName, item, existingRec, onSaved }
+
+  function updateComputedStartPreview(){
+    var delivery = schedDeliveryInput.value;
+    var lead = schedLeadTimeInput.value;
+    if (!delivery){ schedComputedStart.textContent = "--"; return; }
+    var start = subtractBusinessDays(delivery, lead === "" ? DEFAULT_LEAD_TIME_DAYS : lead);
+    schedComputedStart.textContent = start ? formatDateDisplay(start) : "--";
+  }
+  schedDeliveryInput.addEventListener("input", updateComputedStartPreview);
+  schedLeadTimeInput.addEventListener("input", updateComputedStartPreview);
+
+  function openScheduleModal(projectHandle, projectName, item, onSaved){
+    return readJoinerySchedule(projectHandle).then(function(list){
+      var existingRec = findScheduleRecord(list, item.level, item.room, item.joineryId);
+      scheduleModalCtx = { projectHandle: projectHandle, projectName: projectName, item: item, onSaved: onSaved };
+      scheduleModalTitle.textContent = "Set schedule";
+      scheduleModalSub.textContent = projectName + " — " + item.level + " / " + item.room + (item.joineryId ? " / " + item.joineryId : "") + (item.description ? " — " + item.description : "") + (item.workOrderNo ? " (WO " + item.workOrderNo + ")" : "");
+      schedDeliveryInput.value = existingRec ? (existingRec.requiredDeliveryDate || "") : "";
+      schedLeadTimeInput.value = existingRec && existingRec.manufactureLeadTimeDays != null ? existingRec.manufactureLeadTimeDays : DEFAULT_LEAD_TIME_DAYS;
+      schedClearBtn.hidden = !existingRec;
+      scheduleModalError.hidden = true;
+      updateComputedStartPreview();
+      scheduleModalBackdrop.hidden = false;
+    });
+  }
+  function closeScheduleModal(){
+    scheduleModalBackdrop.hidden = true;
+    scheduleModalCtx = null;
+  }
+  schedCancelBtn.addEventListener("click", closeScheduleModal);
+  schedSaveBtn.addEventListener("click", function(){
+    if (!scheduleModalCtx) return;
+    var delivery = schedDeliveryInput.value;
+    if (!delivery){
+      scheduleModalError.hidden = false;
+      scheduleModalError.textContent = "A required delivery date is needed to schedule this item.";
+      return;
+    }
+    var leadRaw = schedLeadTimeInput.value;
+    var lead = leadRaw === "" ? DEFAULT_LEAD_TIME_DAYS : Math.max(0, parseInt(leadRaw, 10) || 0);
+    var start = subtractBusinessDays(delivery, lead);
+    var ctx = scheduleModalCtx;
+    readJoinerySchedule(ctx.projectHandle).then(function(list){
+      var existing = findScheduleRecord(list, ctx.item.level, ctx.item.room, ctx.item.joineryId);
+      var rec = {
+        level: ctx.item.level,
+        room: ctx.item.room,
+        joineryId: ctx.item.joineryId,
+        requiredDeliveryDate: delivery,
+        manufactureLeadTimeDays: lead,
+        manufactureStartDate: start,
+        updatedAt: new Date().toISOString()
+      };
+      if (existing){
+        list = list.map(function(r){ return r === existing ? rec : r; });
+      } else {
+        list.push(rec);
+      }
+      return writeJoinerySchedule(ctx.projectHandle, list);
+    }).then(function(){
+      showToast("Schedule saved.");
+      closeScheduleModal();
+      if (typeof ctx.onSaved === "function") ctx.onSaved();
+    }).catch(function(err){
+      console.error("Saving schedule failed:", err);
+      scheduleModalError.hidden = false;
+      scheduleModalError.textContent = "Couldn't save this schedule -- try again.";
+    });
+  });
+  schedClearBtn.addEventListener("click", function(){
+    if (!scheduleModalCtx) return;
+    var ctx = scheduleModalCtx;
+    readJoinerySchedule(ctx.projectHandle).then(function(list){
+      var next = list.filter(function(r){
+        return !(r && r.level === ctx.item.level && (r.room || "") === (ctx.item.room || "") && (r.joineryId || "") === (ctx.item.joineryId || ""));
+      });
+      return writeJoinerySchedule(ctx.projectHandle, next);
+    }).then(function(){
+      showToast("Schedule cleared.");
+      closeScheduleModal();
+      if (typeof ctx.onSaved === "function") ctx.onSaved();
+    }).catch(function(err){
+      console.error("Clearing schedule failed:", err);
+      scheduleModalError.hidden = false;
+      scheduleModalError.textContent = "Couldn't clear this schedule -- try again.";
+    });
+  });
+
+  /* ============================== enriched row building (shared by both tables) ============================== */
+  function buildEnrichedRows(items, statusList, scheduleList, projectName, projectHandle){
+    var today = todayDateStr();
+    return items.map(function(item){
+      var statusKey = (findJoineryStatus(statusList, item.level, item.room, item.joineryId) || {}).status || "";
+      var schedRec = findScheduleRecord(scheduleList, item.level, item.room, item.joineryId);
+      var delay = computeDelayInfo(schedRec, statusKey, today);
+      return {
+        project: projectName,
+        projectHandle: projectHandle,
+        level: item.level,
+        room: item.room,
+        joineryId: item.joineryId,
+        description: item.description,
+        workOrderNo: item.workOrderNo,
+        statusKey: statusKey,
+        requiredDeliveryDate: schedRec ? schedRec.requiredDeliveryDate : "",
+        manufactureLeadTimeDays: schedRec ? schedRec.manufactureLeadTimeDays : null,
+        manufactureStartDate: schedRec ? schedRec.manufactureStartDate : "",
+        delayKey: delay.key,
+        delayLabel: delay.label,
+        delaySeverity: delay.severity,
+        rawItem: item
+      };
+    });
+  }
+  function scheduleCompare(a, b, sort){
+    var col = sort.col;
+    var cmp;
+    if (col === "requiredDeliveryDate" || col === "manufactureStartDate"){
+      var av = a[col] || "", bv = b[col] || "";
+      if (!av && !bv) cmp = 0;
+      else if (!av) return 1;   // unset always sorts last, regardless of direction
+      else if (!bv) return -1;
+      else cmp = av < bv ? -1 : (av > bv ? 1 : 0);
+      return sort.dir === "desc" ? -cmp : cmp;
+    }
+    if (col === "status"){
+      cmp = joineryStatusRank(a.statusKey) - joineryStatusRank(b.statusKey);
+      return sort.dir === "desc" ? -cmp : cmp;
+    }
+    if (col === "delay"){
+      cmp = a.delaySeverity - b.delaySeverity;
+      return sort.dir === "desc" ? -cmp : cmp;
+    }
+    if (col === "leadTime"){
+      cmp = (a.manufactureLeadTimeDays == null ? -1 : a.manufactureLeadTimeDays) - (b.manufactureLeadTimeDays == null ? -1 : b.manufactureLeadTimeDays);
+      return sort.dir === "desc" ? -cmp : cmp;
+    }
+    var av2 = String(a[col] || "").toLowerCase(), bv2 = String(b[col] || "").toLowerCase();
+    cmp = av2 < bv2 ? -1 : (av2 > bv2 ? 1 : 0);
+    return sort.dir === "desc" ? -cmp : cmp;
+  }
+  function scheduleRowCells(row, showProject){
+    return (showProject ? "<td>" + escapeHtml(row.project) + "</td>" : "") +
+      "<td>" + escapeHtml(row.level) + "</td>" +
+      "<td>" + escapeHtml(row.room) + "</td>" +
+      "<td>" + escapeHtml(row.joineryId) + "</td>" +
+      "<td class=\"wrap\">" + escapeHtml(row.description) + "</td>" +
+      "<td>" + (row.workOrderNo ? escapeHtml(row.workOrderNo) : "<span class=\"muted-cell\">—</span>") + "</td>" +
+      "<td>" + (row.requiredDeliveryDate ? escapeHtml(formatDateDisplay(row.requiredDeliveryDate)) : "<span class=\"muted-cell\">—</span>") + "</td>" +
+      "<td>" + (row.manufactureStartDate ? escapeHtml(formatDateDisplay(row.manufactureStartDate)) : "<span class=\"muted-cell\">—</span>") + "</td>" +
+      "<td>" + (row.manufactureLeadTimeDays != null ? row.manufactureLeadTimeDays + "d" : "<span class=\"muted-cell\">—</span>") + "</td>" +
+      "<td class=\"status-cell\">" + statusLabelHtml(row.statusKey) + "</td>" +
+      "<td><span class=\"delay-pill delay-" + row.delayKey + "\">" + escapeHtml(row.delayLabel) + "</span></td>" +
+      "<td class=\"row-actions\"><button type=\"button\" class=\"btn secondary sm view-plan-btn\">View on plan</button><button type=\"button\" class=\"btn secondary sm edit-sched-btn\">Edit schedule</button></td>";
+  }
+  function wireRowActions(tr, row, returnScreen){
+    var viewBtn = tr.querySelector(".view-plan-btn");
+    var editBtn = tr.querySelector(".edit-sched-btn");
+    viewBtn.addEventListener("click", function(){
+      openPlanCanvasForLevel(row.projectHandle, row.project, row.level, returnScreen);
+    });
+    editBtn.addEventListener("click", function(){
+      openScheduleModal(row.projectHandle, row.project, row.rawItem, function(){
+        if (returnScreen === "overall") loadOverallSchedule(); else loadProjectSchedule(row.projectHandle, row.project);
+      });
+    });
+  }
+
+  /* ============================== Overall Schedule screen ============================== */
+  var overallTable = document.getElementById("overallTable");
+  var overallTableBody = document.getElementById("overallTableBody");
+  var overallTableCard = document.getElementById("overallTableCard");
+  var overallLoadingCard = document.getElementById("overallLoadingCard");
+  var overallEmpty = document.getElementById("overallEmpty");
+  var overallEmptyAll = document.getElementById("overallEmptyAll");
+  var overallProjectFilter = document.getElementById("overallProjectFilter");
+  var overallStatusFilter = document.getElementById("overallStatusFilter");
+  var overallDelayFilter = document.getElementById("overallDelayFilter");
+  var overallSearchInput = document.getElementById("overallSearchInput");
+  var overallAllRows = [];
+  var overallSort = { col: "requiredDeliveryDate", dir: "asc" };
+
+  function statusFilterMatches(filterValue, statusKey){
+    if (filterValue === "") return true; // "All statuses"
+    if (filterValue === "__created__") return statusKey === "";
+    return statusKey === filterValue;
+  }
+  function overallMatchesFilters(row){
+    if (overallProjectFilter.value && row.project !== overallProjectFilter.value) return false;
+    if (!statusFilterMatches(overallStatusFilter.value, row.statusKey)) return false;
+    if (overallDelayFilter.value && row.delayKey !== overallDelayFilter.value) return false;
+    var q = overallSearchInput.value.trim().toLowerCase();
+    if (q){
+      var hay = ((row.joineryId || "") + " " + (row.description || "") + " " + (row.workOrderNo || "") + " " + (row.project || "")).toLowerCase();
+      if (hay.indexOf(q) === -1) return false;
+    }
+    return true;
+  }
+  function renderOverallTable(){
+    var filtered = overallAllRows.filter(overallMatchesFilters);
+    filtered.sort(function(a, b){ return scheduleCompare(a, b, overallSort); });
+    overallTableBody.innerHTML = "";
+    filtered.forEach(function(row){
+      var tr = document.createElement("tr");
+      tr.innerHTML = scheduleRowCells(row, true);
+      wireRowActions(tr, row, "overall");
+      overallTableBody.appendChild(tr);
+    });
+    overallEmptyAll.hidden = overallAllRows.length !== 0;
+    overallEmpty.hidden = !(overallAllRows.length > 0 && filtered.length === 0);
+    overallTable.hidden = overallAllRows.length === 0;
+    Array.prototype.forEach.call(overallTable.querySelectorAll("th"), function(th){
+      th.classList.remove("sorted", "desc");
+      if (th.getAttribute("data-col") === overallSort.col){
+        th.classList.add("sorted");
+        if (overallSort.dir === "desc") th.classList.add("desc");
+      }
+    });
+  }
+  Array.prototype.forEach.call(overallTable.querySelectorAll("th"), function(th){
+    var col = th.getAttribute("data-col");
+    if (!col) return;
+    th.addEventListener("click", function(){
+      if (overallSort.col === col){ overallSort.dir = overallSort.dir === "asc" ? "desc" : "asc"; }
+      else { overallSort.col = col; overallSort.dir = "asc"; }
+      renderOverallTable();
+    });
+  });
+  [overallProjectFilter, overallStatusFilter, overallDelayFilter].forEach(function(el){ el.addEventListener("change", renderOverallTable); });
+  overallSearchInput.addEventListener("input", renderOverallTable);
+  document.getElementById("refreshOverallBtn").addEventListener("click", loadOverallSchedule);
+
+  // Reads EVERY project under the chosen root, sequentially -- a simple,
+  // known-scalable-enough-for-V1 design given how this family already
+  // reads its data (no project count in this ecosystem has ever needed
+  // more than that so far).
+  function loadOverallSchedule(){
+    overallTableCard.hidden = true;
+    overallLoadingCard.hidden = false;
+    return listExistingProjects(projectsRootHandle).then(function(names){
+      overallProjectFilter.innerHTML = "<option value=\"\">All projects</option>" + names.map(function(n){ return "<option value=\"" + escapeHtml(n) + "\">" + escapeHtml(n) + "</option>"; }).join("");
+      return names.reduce(function(chain, name){
+        return chain.then(function(acc){
+          return projectsRootHandle.getDirectoryHandle(name, { create: false }).then(function(projectHandle){
+            return Promise.all([
+              readJoineryItems(projectHandle),
+              readJoineryStatuses(projectHandle),
+              readJoinerySchedule(projectHandle)
+            ]).then(function(res){
+              var rows = buildEnrichedRows(res[0], res[1], res[2], name, projectHandle);
+              return acc.concat(rows);
+            });
+          }).catch(function(){ return acc; });
+        });
+      }, Promise.resolve([]));
+    }).then(function(rows){
+      overallAllRows = rows;
+      overallLoadingCard.hidden = true;
+      overallTableCard.hidden = false;
+      renderOverallTable();
+    }).catch(function(err){
+      console.error("Loading overall schedule failed:", err);
+      overallLoadingCard.hidden = true;
+      overallTableCard.hidden = false;
+      showToast("Couldn't read every project's schedule.");
+    });
+  }
+
+  /* ============================== Per-project Schedule screen ============================== */
+  var projTable = document.getElementById("projTable");
+  var projTableBody = document.getElementById("projTableBody");
+  var projEmpty = document.getElementById("projEmpty");
+  var projEmptyAll = document.getElementById("projEmptyAll");
+  var projLevelFilter = document.getElementById("projLevelFilter");
+  var projStatusFilter = document.getElementById("projStatusFilter");
+  var projDelayFilter = document.getElementById("projDelayFilter");
+  var projSearchInput = document.getElementById("projSearchInput");
+  var projectScheduleTitle = document.getElementById("projectScheduleTitle");
+  var levelPlanSelect = document.getElementById("levelPlanSelect");
+  var openLevelPlanBtn = document.getElementById("openLevelPlanBtn");
+  var levelPlanRow = document.getElementById("levelPlanRow");
+  var projAllRows = [];
+  var projSort = { col: "requiredDeliveryDate", dir: "asc" };
+  var activeProjectHandle = null, activeProjectName = "";
+
+  function projMatchesFilters(row){
+    if (projLevelFilter.value && row.level !== projLevelFilter.value) return false;
+    if (!statusFilterMatches(projStatusFilter.value, row.statusKey)) return false;
+    if (projDelayFilter.value && row.delayKey !== projDelayFilter.value) return false;
+    var q = projSearchInput.value.trim().toLowerCase();
+    if (q){
+      var hay = ((row.joineryId || "") + " " + (row.description || "") + " " + (row.workOrderNo || "")).toLowerCase();
+      if (hay.indexOf(q) === -1) return false;
+    }
+    return true;
+  }
+  function renderProjTable(){
+    var filtered = projAllRows.filter(projMatchesFilters);
+    filtered.sort(function(a, b){ return scheduleCompare(a, b, projSort); });
+    projTableBody.innerHTML = "";
+    filtered.forEach(function(row){
+      var tr = document.createElement("tr");
+      tr.innerHTML = scheduleRowCells(row, false);
+      wireRowActions(tr, row, "projectSchedule");
+      projTableBody.appendChild(tr);
+    });
+    projEmptyAll.hidden = projAllRows.length !== 0;
+    projEmpty.hidden = !(projAllRows.length > 0 && filtered.length === 0);
+    projTable.hidden = projAllRows.length === 0;
+    Array.prototype.forEach.call(projTable.querySelectorAll("th"), function(th){
+      th.classList.remove("sorted", "desc");
+      if (th.getAttribute("data-col") === projSort.col){
+        th.classList.add("sorted");
+        if (projSort.dir === "desc") th.classList.add("desc");
+      }
+    });
+  }
+  Array.prototype.forEach.call(projTable.querySelectorAll("th"), function(th){
+    var col = th.getAttribute("data-col");
+    if (!col) return;
+    th.addEventListener("click", function(){
+      if (projSort.col === col){ projSort.dir = projSort.dir === "asc" ? "desc" : "asc"; }
+      else { projSort.col = col; projSort.dir = "asc"; }
+      renderProjTable();
+    });
+  });
+  [projLevelFilter, projStatusFilter, projDelayFilter].forEach(function(el){ el.addEventListener("change", renderProjTable); });
+  projSearchInput.addEventListener("input", renderProjTable);
+  openLevelPlanBtn.addEventListener("click", function(){
+    if (!levelPlanSelect.value) { showToast("No levels with a saved plan found for this project yet."); return; }
+    openPlanCanvasForLevel(activeProjectHandle, activeProjectName, levelPlanSelect.value, "projectSchedule");
+  });
+
+  function loadProjectSchedule(projectHandle, projectName){
+    activeProjectHandle = projectHandle;
+    activeProjectName = projectName;
+    projectScheduleTitle.textContent = projectName;
+    return Promise.all([
+      readJoineryItems(projectHandle),
+      readJoineryStatuses(projectHandle),
+      readJoinerySchedule(projectHandle),
+      listExistingLevels(projectHandle)
+    ]).then(function(res){
+      var rows = buildEnrichedRows(res[0], res[1], res[2], projectName, projectHandle);
+      projAllRows = rows;
+      var levelNamesFromItems = Array.from(new Set(rows.map(function(r){ return r.level; }))).sort(function(a, b){ return a.localeCompare(b, undefined, { sensitivity: "base" }); });
+      projLevelFilter.innerHTML = "<option value=\"\">All levels</option>" + levelNamesFromItems.map(function(n){ return "<option value=\"" + escapeHtml(n) + "\">" + escapeHtml(n) + "</option>"; }).join("");
+      var planLevels = res[3];
+      levelPlanSelect.innerHTML = planLevels.map(function(n){ return "<option value=\"" + escapeHtml(n) + "\">" + escapeHtml(n) + "</option>"; }).join("");
+      levelPlanRow.hidden = planLevels.length === 0;
+      renderProjTable();
+    }).catch(function(err){
+      console.error("Loading project schedule failed:", err);
+      showToast("Couldn't read this project's schedule.");
+    });
+  }
+
+  /* ============================== Home / project list / navigation ============================== */
+  var screens = {
+    setup: document.getElementById("screenSetup"),
+    reconnect: document.getElementById("screenReconnect"),
+    home: document.getElementById("screenHome"),
+    overall: document.getElementById("screenOverall"),
+    projectSchedule: document.getElementById("screenProjectSchedule")
+  };
+  function showScreen(name){
+    Object.keys(screens).forEach(function(k){ screens[k].hidden = (k !== name); });
+  }
+
+  var projectsRootHandle = null, projectsRootName = "";
+  var homeProjectListItems = document.getElementById("homeProjectListItems");
+  var homeProjectListEmpty = document.getElementById("homeProjectListEmpty");
+  var chooseRootBtn = document.getElementById("chooseRootBtn");
+  var chooseDifferentRootBtn = document.getElementById("chooseDifferentRootBtn");
+  var reconnectChooseDifferentBtn = document.getElementById("reconnectChooseDifferentBtn");
+  var reconnectBtn = document.getElementById("reconnectBtn");
+  var reconnectName = document.getElementById("reconnectName");
+  var setupError = document.getElementById("setupError");
+
+  function folderPickerErrorMessage(err){
+    if (err && err.name === "SecurityError") return "That folder can't be used here -- choose a different one.";
+    return "Couldn't open that folder -- try again.";
+  }
+
+  // Requests "readwrite" from the start -- this app's only write is its
+  // own new joinery-schedule.json, but that write happens the moment
+  // someone sets their first schedule, and asking again then would mean a
+  // second picker/consent round-trip for no benefit.
+  function pickProjectsRootFolder(){
+    return window.showDirectoryPicker({ id: "utzline-scheduler-root", mode: "readwrite" }).then(function(handle){
+      return detectFolderShape(handle).then(function(shape){
+        if (shape === "project"){
+          setupError.hidden = false;
+          setupError.textContent = "That looks like a single project's own folder, not your Projects folder. Choose the top-level folder that contains all your projects.";
+          return;
+        }
+        projectsRootHandle = handle; projectsRootName = handle.name;
+        // Remembering the folder for next time is a convenience, not a
+        // requirement for this session to work -- if persisting it fails
+        // for any reason, still show the project list rather than
+        // blocking on a "couldn't open that folder" error the person
+        // would have no way to act on.
+        return idbSet("projectsRootHandle", handle).catch(function(){}).then(function(){
+          return populateHome();
+        });
+      });
+    });
+  }
+  chooseRootBtn.addEventListener("click", function(){
+    setupError.hidden = true;
+    pickProjectsRootFolder().catch(function(err){
+      if (err && err.name === "AbortError") return;
+      console.error("Choose Projects folder failed:", err);
+      setupError.hidden = false;
+      setupError.textContent = folderPickerErrorMessage(err);
+    });
+  });
+  chooseDifferentRootBtn.addEventListener("click", function(){
+    pickProjectsRootFolder().catch(function(err){
+      if (err && err.name === "AbortError") return;
+      console.error("Choose Projects folder failed:", err);
+      showToast(folderPickerErrorMessage(err));
+    });
+  });
+  reconnectChooseDifferentBtn.addEventListener("click", function(){
+    pickProjectsRootFolder().catch(function(err){
+      if (err && err.name === "AbortError") return;
+      console.error("Choose Projects folder failed:", err);
+      showToast(folderPickerErrorMessage(err));
+    });
+  });
+  reconnectBtn.addEventListener("click", function(){
+    if (!projectsRootHandle) return;
+    projectsRootHandle.requestPermission({ mode: "readwrite" }).then(function(perm){
+      if (perm !== "granted") return;
+      populateHome();
+    });
+  });
+
+  function populateHome(){
+    return listExistingProjects(projectsRootHandle).then(function(names){
+      homeProjectListItems.innerHTML = "";
+      homeProjectListEmpty.hidden = names.length > 0;
+      names.forEach(function(name){
+        var row = document.createElement("button");
+        row.className = "list-item";
+        row.innerHTML = "<span>" + escapeHtml(name) + "</span><span class=\"chev\">&rsaquo;</span>";
+        row.addEventListener("click", function(){ openProjectSchedule(name); });
+        homeProjectListItems.appendChild(row);
+      });
+      document.title = "UTZLINE Scheduler";
+      showScreen("home");
+    }).catch(function(err){
+      console.error("Listing projects failed:", err);
+      showToast("Couldn't list projects in this folder.");
+    });
+  }
+  function openProjectSchedule(name){
+    return projectsRootHandle.getDirectoryHandle(name, { create: false }).then(function(dirH){
+      showScreen("projectSchedule");
+      return loadProjectSchedule(dirH, name);
+    }).catch(function(err){
+      console.error("Opening project failed:", err);
+      showToast("Couldn't open that project.");
+    });
+  }
+  document.getElementById("openOverallScheduleBtn").addEventListener("click", function(){
+    showScreen("overall");
+    loadOverallSchedule();
+  });
+  document.getElementById("backFromOverallBtn").addEventListener("click", function(){ showScreen("home"); });
+  document.getElementById("backFromProjectScheduleBtn").addEventListener("click", function(){ showScreen("home"); });
+
+  /* ============================== boot ============================== */
+  function boot(){
+    if (typeof window.showDirectoryPicker !== "function"){
+      setupError.hidden = false;
+      setupError.textContent = "This browser doesn't support the File System Access API that UTZLINE Scheduler needs. Use an up-to-date Chrome/Edge, or the installed app.";
+      showScreen("setup");
+      return;
+    }
+    idbGet("projectsRootHandle").then(function(handle){
+      if (!handle){ showScreen("setup"); return; }
+      projectsRootHandle = handle; projectsRootName = handle.name;
+      return handle.queryPermission({ mode: "readwrite" }).then(function(perm){
+        if (perm === "granted"){
+          return populateHome();
+        }
+        reconnectName.textContent = projectsRootName;
+        showScreen("reconnect");
+      });
+    }).catch(function(){
+      projectsRootHandle = null; projectsRootName = "";
+      showScreen("setup");
+    });
+  }
+
+  if ("serviceWorker" in navigator){
+    window.addEventListener("load", function(){
+      navigator.serviceWorker.register("./service-worker.js").catch(function(err){
+        console.error("Service worker registration failed:", err);
+      });
+    });
+  }
+
+  // Test-only hooks -- exposes the pure logic (business-day math, delay
+  // flagging, row building/sorting) plus the key DOM-driving entry points
+  // so a Playwright regression suite can exercise this app the same way
+  // every other app in the family is tested (fake-fs.js + a real
+  // window.showDirectoryPicker fake), without needing a real browser
+  // right-click/long-press gesture for every scenario.
+  window.__testHooks = {
+    subtractBusinessDays: subtractBusinessDays,
+    todayDateStr: todayDateStr,
+    computeDelayInfo: computeDelayInfo,
+    joineryStatusRank: joineryStatusRank,
+    readJoineryItems: readJoineryItems,
+    readJoineryStatuses: readJoineryStatuses,
+    readJoinerySchedule: readJoinerySchedule,
+    writeJoinerySchedule: writeJoinerySchedule,
+    findScheduleRecord: findScheduleRecord,
+    buildEnrichedRows: buildEnrichedRows,
+    scheduleCompare: scheduleCompare,
+    listExistingProjects: listExistingProjects,
+    listExistingLevels: listExistingLevels,
+    readLevelFile: readLevelFile,
+    openScheduleModal: openScheduleModal,
+    openPlanCanvasForLevel: openPlanCanvasForLevel,
+    onPlanRightClickOrLongPress: onPlanRightClickOrLongPress,
+    onPlanTap: onPlanTap,
+    planMarkerAt: function(){ return planMarkerAt.apply(null, arguments); },
+    setPlanView: function(v){ Object.assign(planView, v); planApplyTransform(); },
+    getPlanView: function(){ return planView; },
+    loadOverallSchedule: loadOverallSchedule,
+    loadProjectSchedule: loadProjectSchedule,
+    openProjectSchedule: openProjectSchedule,
+    ready: function(){ return true; }
+  };
+
+  boot();
+})();
+</script>
+</body>
+</html>
