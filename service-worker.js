@@ -288,7 +288,7 @@
 // suite (run_all.sh) re-run clean, zero regressions. Does NOT touch
 // source.html, Install ITP, Manufacture ITP, or Projects in any way.)
 var ICON_VERSION = "v1";
-var CACHE_NAME = "utzline-scheduler-cache-v14";
+var CACHE_NAME = "utzline-scheduler-cache-v15";
 
 var PRECACHE_URLS = [
   "./",

@@ -1480,12 +1480,80 @@
   /* ============================== this app's OWN schedule file ==============================
      "joinery-schedule.json" -- a sibling of joinery-items.json/
      joinery-status.json, but owned exclusively by THIS app: no other app
-     in the family reads or writes it. One record per scheduled item,
-     matched by the exact same (level, room, joineryId) triple
-     joinery-status.json already uses. */
+     in the family writes it (UTZLINE Projects and Solid Surface Schedule
+     both read it, read-only). One record per scheduled item, matched by
+     the exact same (level, room, joineryId) triple joinery-status.json
+     already uses.
+
+     ---- joinery-schedule.json v2: event-sourced storage (v15, 2026-09-24) ----
+     Third and final round of the same rebuild already shipped for
+     joinery-status.json and machining-flags.json -- see joinery-status.json's
+     own comment above readJoineryStatuses (further up this file) for the
+     full reasoning. Andrew's original scale concern applies here too:
+     multiple site managers could be setting or clearing schedules on
+     different items in the same project at the same time, and this file
+     was still one shared array, read-modified-and-rewritten-whole on every
+     single Save/Clear. Unlike joinery-status.json (a running history) or
+     machining-flags.json (three independently-tracked cut types), a
+     schedule record here is always set or cleared as ONE atomic whole (the
+     "Set schedule" dialog always writes every field together, never a
+     partial update) -- so each Save or Clear is simply its own immutable
+     event ({kind:"set", ...every field...} or {kind:"clear"}), filed under
+     "Project Saves/Joinery Schedule/<key>/", and folding an item's events
+     just means taking the single LATEST one by timestamp: if it's a
+     "clear", the item has no schedule; otherwise that event's own fields
+     ARE the current record. migrateLegacyJoineryScheduleIfNeeded migrates
+     any real, already-recorded schedule from the old file automatically,
+     once, idempotently, the first time this app opens a project after this
+     update -- the old file is left on disk afterward, untouched. Reuses
+     statusEventStampFromIso/statusEventFileName/readJsonFileHandle,
+     already defined above for joinery-status.json's own read-only port. */
   function joineryScheduleFilename(){ return "joinery-schedule.json"; }
-  function readJoinerySchedule(projectHandle){
-    if (!projectHandle) return Promise.resolve([]);
+  function joineryScheduleEventsBranchName(){ return "Joinery Schedule"; }
+  function getJoineryScheduleEventsRootDir(projectHandle, create){
+    return projectHandle.getDirectoryHandle(projectSavesDirName(), { create: !!create }).then(function(psH){
+      return psH.getDirectoryHandle(joineryScheduleEventsBranchName(), { create: !!create });
+    });
+  }
+  function getJoineryScheduleItemDir(projectHandle, key, create){
+    return getJoineryScheduleEventsRootDir(projectHandle, create).then(function(rootH){
+      return rootH.getDirectoryHandle(key, { create: !!create });
+    });
+  }
+  function listJoineryScheduleEventsForItem(projectHandle, key){
+    return getJoineryScheduleItemDir(projectHandle, key, false).then(function(dirH){
+      if (!dirH || typeof dirH.values !== "function") return [];
+      var handles = [];
+      var iter = dirH.values();
+      function step(){
+        return iter.next().then(function(res){
+          if (res.done) return handles;
+          if (res.value && res.value.kind === "file" && /\.json$/i.test(res.value.name)) handles.push(res.value);
+          return step();
+        });
+      }
+      return step();
+    }, function(){ return []; }).then(function(handles){
+      return Promise.all(handles.map(readJsonFileHandle));
+    }).then(function(events){
+      return events.filter(function(e){ return e && typeof e === "object"; });
+    });
+  }
+  function foldJoinerySchedule(events){
+    if (!events || !events.length) return null;
+    var latest = null;
+    events.forEach(function(e){ if (!latest || (e.at || "") > (latest.at || "")) latest = e; });
+    if (!latest || latest.kind === "clear") return null;
+    return {
+      level: latest.level || "", room: latest.room || "", joineryId: latest.joineryId || "",
+      requiredDeliveryDate: latest.requiredDeliveryDate || "",
+      manufactureLeadTimeDays: latest.manufactureLeadTimeDays,
+      manufactureStartDate: latest.manufactureStartDate || "",
+      updatedAt: latest.at,
+      setBy: latest.by || ""
+    };
+  }
+  function readLegacyJoinerySchedule(projectHandle){
     return projectHandle.getFileHandle(joineryScheduleFilename(), { create: false }).then(function(fh){
       return fh.getFile();
     }).then(function(file){
@@ -1494,11 +1562,76 @@
       try{ var arr = JSON.parse(text); return Array.isArray(arr) ? arr : []; }catch(e){ return []; }
     }, function(){ return []; });
   }
-  function writeJoinerySchedule(projectHandle, list){
-    return projectHandle.getFileHandle(joineryScheduleFilename(), { create: true }).then(function(fh){
+  function migrateLegacyJoineryScheduleIfNeeded(projectHandle){
+    return getJoineryScheduleEventsRootDir(projectHandle, false).then(function(){
+      return false;
+    }, function(){
+      return getJoineryScheduleEventsRootDir(projectHandle, true).then(function(){
+        return readLegacyJoinerySchedule(projectHandle);
+      }).then(function(list){
+        var writes = [];
+        list.forEach(function(rec){
+          if (!rec) return;
+          var key = joineryItemPageKey(rec.level, rec.room, rec.joineryId);
+          var at = rec.updatedAt || new Date(0).toISOString();
+          var payload = {
+            kind: "set", level: rec.level || "", room: rec.room || "", joineryId: rec.joineryId || "",
+            requiredDeliveryDate: rec.requiredDeliveryDate || "",
+            manufactureLeadTimeDays: rec.manufactureLeadTimeDays,
+            manufactureStartDate: rec.manufactureStartDate || "",
+            by: rec.setBy || "", at: at
+          };
+          var stamp = statusEventStampFromIso(at);
+          writes.push(getJoineryScheduleItemDir(projectHandle, key, true).then(function(dirH){
+            return dirH.getFileHandle(statusEventFileName(payload.by, stamp, "set"), { create: true });
+          }).then(function(fh){
+            return fh.createWritable();
+          }).then(function(w){
+            return w.write(JSON.stringify(payload)).then(function(){ return w.close(); });
+          }).catch(function(){}));
+        });
+        return Promise.all(writes);
+      }).then(function(){ return true; }).catch(function(){ return false; });
+    });
+  }
+  function readJoinerySchedule(projectHandle){
+    if (!projectHandle) return Promise.resolve([]);
+    return migrateLegacyJoineryScheduleIfNeeded(projectHandle).then(function(){
+      return getJoineryScheduleEventsRootDir(projectHandle, false).then(function(rootH){
+        var keys = [];
+        var iter = rootH.values();
+        function step(){
+          return iter.next().then(function(res){
+            if (res.done) return keys;
+            if (res.value && res.value.kind === "directory") keys.push(res.value.name);
+            return step();
+          });
+        }
+        return step();
+      }, function(){ return null; });
+    }).then(function(keys){
+      if (keys === null) return readLegacyJoinerySchedule(projectHandle);
+      return Promise.all(keys.map(function(key){
+        return listJoineryScheduleEventsForItem(projectHandle, key).then(foldJoinerySchedule);
+      })).then(function(list){ return list.filter(Boolean); });
+    });
+  }
+  // Appends one "set" (full schedule record) or "clear" event for a single
+  // item, replacing the old read-whole-array/change-one-record/
+  // write-whole-array-back pattern -- two site managers scheduling
+  // different items (or even the same one) at the same time can now never
+  // collide, since they're never writing to the same file.
+  function writeJoineryScheduleEvent(projectHandle, level, room, joineryId, kind, fields, updatedBy){
+    var key = joineryItemPageKey(level, room, joineryId);
+    var at = new Date().toISOString();
+    var payload = Object.assign({ kind: kind, level: level, room: room || "", joineryId: joineryId || "", by: updatedBy || "", at: at }, fields || {});
+    var stamp = statusEventStampFromIso(at);
+    return getJoineryScheduleItemDir(projectHandle, key, true).then(function(dirH){
+      return dirH.getFileHandle(statusEventFileName(updatedBy, stamp, kind), { create: true });
+    }).then(function(fh){
       return fh.createWritable();
     }).then(function(w){
-      return w.write(JSON.stringify(list)).then(function(){ return w.close(); });
+      return w.write(JSON.stringify(payload)).then(function(){ return w.close(); });
     });
   }
   function findScheduleRecord(list, level, room, joineryId){
@@ -2196,25 +2329,13 @@
     var lead = leadRaw === "" ? DEFAULT_LEAD_TIME_DAYS : Math.max(0, parseInt(leadRaw, 10) || 0);
     var start = subtractBusinessDays(delivery, lead);
     var ctx = scheduleModalCtx;
-    readJoinerySchedule(ctx.projectHandle).then(function(list){
-      var existing = findScheduleRecord(list, ctx.item.level, ctx.item.room, ctx.item.joineryId);
-      var rec = {
-        level: ctx.item.level,
-        room: ctx.item.room,
-        joineryId: ctx.item.joineryId,
-        requiredDeliveryDate: delivery,
-        manufactureLeadTimeDays: lead,
-        manufactureStartDate: start,
-        updatedAt: new Date().toISOString(),
-        setBy: deviceUserName || "" // read-only attribution (identity feature, 2026-09-23) -- never gates or validates anything
-      };
-      if (existing){
-        list = list.map(function(r){ return r === existing ? rec : r; });
-      } else {
-        list.push(rec);
-      }
-      return writeJoinerySchedule(ctx.projectHandle, list);
-    }).then(function(){
+    // deviceUserName below is read-only attribution (identity feature,
+    // 2026-09-23) -- never gates or validates anything.
+    writeJoineryScheduleEvent(ctx.projectHandle, ctx.item.level, ctx.item.room, ctx.item.joineryId, "set", {
+      requiredDeliveryDate: delivery,
+      manufactureLeadTimeDays: lead,
+      manufactureStartDate: start
+    }, deviceUserName || "").then(function(){
       showToast("Schedule saved.");
       closeScheduleModal();
       if (typeof ctx.onSaved === "function") ctx.onSaved();
@@ -2227,12 +2348,7 @@
   schedClearBtn.addEventListener("click", function(){
     if (!scheduleModalCtx) return;
     var ctx = scheduleModalCtx;
-    readJoinerySchedule(ctx.projectHandle).then(function(list){
-      var next = list.filter(function(r){
-        return !(r && r.level === ctx.item.level && (r.room || "") === (ctx.item.room || "") && (r.joineryId || "") === (ctx.item.joineryId || ""));
-      });
-      return writeJoinerySchedule(ctx.projectHandle, next);
-    }).then(function(){
+    writeJoineryScheduleEvent(ctx.projectHandle, ctx.item.level, ctx.item.room, ctx.item.joineryId, "clear", {}, deviceUserName || "").then(function(){
       showToast("Schedule cleared.");
       closeScheduleModal();
       if (typeof ctx.onSaved === "function") ctx.onSaved();
@@ -3075,7 +3191,7 @@
     readJoineryItems: readJoineryItems,
     readJoineryStatuses: readJoineryStatuses,
     readJoinerySchedule: readJoinerySchedule,
-    writeJoinerySchedule: writeJoinerySchedule,
+    writeJoineryScheduleEvent: writeJoineryScheduleEvent,
     findScheduleRecord: findScheduleRecord,
     buildEnrichedRows: buildEnrichedRows,
     scheduleCompare: scheduleCompare,
