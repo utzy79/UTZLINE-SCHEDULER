@@ -256,18 +256,6 @@
   }
   .btn.danger{ background: var(--danger); color: #fff; }
   .btn.sm{ padding: 6px 10px; font-size: 12px; border-radius: 8px; }
-  /* Job note thumbnail (2026-09-24) -- see getJobNoteThumbnail's own
-     comment. A small square button: the "JN" placeholder shows until the
-     real preview image swaps in (or forever, if it never resolves -- still
-     a perfectly good clickable button either way). object-fit:cover crops
-     rather than squashes a non-square PDF page. */
-  .jobnote-thumb-btn{
-    padding: 2px; width: 36px; height: 36px; min-width: 36px;
-    display: inline-flex; align-items: center; justify-content: center;
-    overflow: hidden;
-  }
-  .jobnote-thumb-ph{ font-size: 10px; font-weight: 700; letter-spacing: 0.02em; color: var(--muted); }
-  .jobnote-thumb-img{ width: 100%; height: 100%; object-fit: cover; border-radius: 5px; display: block; }
   .row{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .backrow{ margin-bottom: 16px; }
   .list{ display: flex; flex-direction: column; gap: 8px; }
@@ -810,19 +798,6 @@
     </div>
   </div>
 </div>
-
-<!-- Job note thumbnail (2026-09-24) -- pdf.js, vendored locally (same
-     2.16.105 build Site Measure/Viewer already ship, see PDF_THUMB_* below)
-     so the "Open job note" button can render an actual preview of the
-     newest note's first page instead of just a plain text button.
-     Everything else in this app deliberately has NO pdf.js dependency (see
-     service-worker.js's own long-standing comment on that) -- this is a
-     new, one-off exception scoped to job notes only, piloted here first
-     per Andrew's own "maybe try on scheduler first" before it goes to any
-     other app's job-note button. onerror leaves window.__pdfThumbLibFailed
-     set so the thumbnail code can fall back to a plain icon rather than a
-     blank/broken image if the file is ever missing. -->
-<script src="./pdf.min.js" onerror="window.__pdfThumbLibFailed = true;"></script>
 
 <script>
 (function(){
@@ -2779,12 +2754,7 @@
       // findJoineryStatus already fetched) -- no dead-end "no notes"
       // dialog on every single row, same call UTZLINE Projects made.
       "<td class=\"row-actions\">" +
-      // Job note thumbnail (2026-09-24) -- starts as a plain "JN" placeholder;
-      // wireRowActions below swaps in an actual rendered preview of the
-      // newest note's first page once it's ready (async, pdf.js). Still the
-      // exact same clickable element/class as before (jobnote-btn) -- click
-      // opens the same job-notes list dialog either way, thumbnail or not.
-      (row.jobNote ? "<button type=\"button\" class=\"btn secondary sm jobnote-btn jobnote-thumb-btn\" title=\"Open job note\"><span class=\"jobnote-thumb-ph\">JN</span></button>" : "") +
+      (row.jobNote ? "<button type=\"button\" class=\"btn secondary sm jobnote-btn\">Open job note</button>" : "") +
       "<button type=\"button\" class=\"btn secondary sm view-plan-btn\">View on plan</button><button type=\"button\" class=\"btn secondary sm edit-sched-btn\">Edit schedule</button></td>";
   }
   function wireRowActions(tr, row, returnScreen){
@@ -2794,22 +2764,6 @@
     if (jobNoteBtn){
       jobNoteBtn.addEventListener("click", function(){
         openJobNoteViewDialog(row.projectHandle, row.level, row.room, row.joineryId);
-      });
-      // Kick off the thumbnail render (async, cached) -- see
-      // getJobNoteThumbnail's own comment. Left as a plain "JN" placeholder
-      // (already in the markup above) if this never resolves a dataUrl;
-      // isConnected guards against a full table re-render (e.g. after
-      // Save/Clear on the schedule, or a sort-column click) swapping this
-      // exact button element out from under a still-in-flight render.
-      var jobNoteKey = joineryItemPageKey(row.level, row.room, row.joineryId);
-      getJobNoteThumbnail(row.projectHandle, jobNoteKey).then(function(dataUrl){
-        if (!dataUrl || !jobNoteBtn.isConnected) return;
-        jobNoteBtn.innerHTML = "";
-        var img = document.createElement("img");
-        img.className = "jobnote-thumb-img";
-        img.alt = "";
-        img.src = dataUrl;
-        jobNoteBtn.appendChild(img);
       });
     }
     viewBtn.addEventListener("click", function(){
@@ -2833,99 +2787,6 @@
         if (statusHistoryPop.hidden) showStatusHistoryPop(statusCell, row); else hideStatusHistoryPop();
       });
     }
-  }
-
-  /* ---- Job note thumbnail (2026-09-24) -- Andrew, verbatim: "on the open
-     job note button on the schedules, can this be a thumbnail of the front
-     page (1st page) of the job note. maybe try on schedule first." Renders
-     page 1 of the NEWEST job note PDF (the same file the dialog's own top
-     row already opens -- listJobNotes sorts newest-first) into a small
-     preview image on the row button itself, replacing the plain "JN"
-     placeholder once it's ready. This is the pilot: no other app's own
-     job-note button has this yet, deliberately, per Andrew's own "try on
-     schedule first."
-
-     Needs a real PDF-rendering library, which this app never carried
-     before (see service-worker.js's own long-standing "no pdf.js import"
-     comment -- that note is about IMPORTING floor plans, still true;
-     rendering a thumbnail of an existing PDF is a different, new use).
-     pdf.js is vendored locally (pdf.min.js/pdf.worker.min.js, the same
-     2.16.105 build Site Measure/Viewer already ship) rather than a CDN
-     import, matching this app's own "no CDN calls once installed" rule --
-     the worker itself is also pointed at the local file, not Site
-     Measure/Viewer's own CDN-hosted worker (a small improvement over their
-     existing pattern, not a regression: this app has no floor-plan-PDF
-     dependency needing the worker at import time, only this optional
-     preview, so it can afford to be genuinely offline-safe about it).
-
-     Falls back to the plain "JN" placeholder -- never a blank or broken
-     image -- if pdf.js failed to load (window.__pdfThumbLibFailed), the
-     file doesn't parse as a real PDF, or rendering otherwise errors; the
-     button's click-to-open-dialog behaviour is completely unaffected
-     either way, thumbnail or not. Cached in memory per (item key + file
-     name/size/lastModified) for the rest of this page load, so re-sorting
-     or refreshing a schedule table never re-renders a thumbnail it already
-     has. Deliberately eager (not lazy/on-scroll) for this pilot, for
-     simplicity -- worth revisiting with an IntersectionObserver if a very
-     large Overall Schedule full of job notes ever makes this noticeably
-     slow in the field. */
-  var jobNoteThumbCache = {};
-  function pdfThumbLibReady(){
-    return !!(window.pdfjsLib && typeof window.pdfjsLib.getDocument === "function");
-  }
-  function ensurePdfThumbWorker(){
-    if (!ensurePdfThumbWorker._set){
-      window.pdfjsLib.GlobalWorkerOptions.workerSrc = "./pdf.worker.min.js";
-      ensurePdfThumbWorker._set = true;
-    }
-  }
-  var JOBNOTE_THUMB_MAX_DIM = 96; // a row-height preview, not a reader -- keep the render (and the resulting cached data URL) small
-  function renderPdfFirstPageThumbnail(file){
-    if (!pdfThumbLibReady()) return Promise.reject(new Error("pdf.js not available"));
-    ensurePdfThumbWorker();
-    return file.arrayBuffer().then(function(buf){
-      return window.pdfjsLib.getDocument({ data: buf }).promise;
-    }).then(function(pdfDoc){
-      return pdfDoc.getPage(1);
-    }).then(function(page){
-      var viewport = page.getViewport({ scale: 1 });
-      var longest = Math.max(viewport.width, viewport.height) || 1;
-      viewport = page.getViewport({ scale: JOBNOTE_THUMB_MAX_DIM / longest });
-      var canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.round(viewport.width));
-      canvas.height = Math.max(1, Math.round(viewport.height));
-      var ctx = canvas.getContext("2d");
-      // A PDF page can leave parts transparent -- fill white first so
-      // those don't turn solid black once encoded as JPEG (no alpha
-      // channel), same reasoning Site Measure's own PDF-import thumbnail
-      // rendering already follows for exactly the same format choice.
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      return page.render({ canvasContext: ctx, viewport: viewport }).promise.then(function(){
-        var dataUrl = canvas.toDataURL("image/jpeg", 0.85);
-        canvas.width = 0; canvas.height = 0;
-        return dataUrl;
-      });
-    });
-  }
-  function getJobNoteThumbnail(projectHandle, key){
-    return listJobNotes(projectHandle, key).then(function(notes){
-      if (!notes.length) return null;
-      var newest = notes[0];
-      return newest.handle.getFile().then(function(file){
-        var cacheKey = key + "|" + newest.fileName + "|" + file.size + "|" + file.lastModified;
-        if (jobNoteThumbCache[cacheKey]) return jobNoteThumbCache[cacheKey];
-        var p = renderPdfFirstPageThumbnail(file).catch(function(err){
-          console.error("Job note thumbnail render failed -- keeping the plain placeholder:", err);
-          return null;
-        });
-        jobNoteThumbCache[cacheKey] = p;
-        return p;
-      });
-    }).catch(function(err){
-      console.error("Job note thumbnail lookup failed:", err);
-      return null;
-    });
   }
 
   /* ---- "Open job note" dialog (2026-09-24) -- see the Job notes
@@ -3347,8 +3208,6 @@
     loadOverallSchedule: loadOverallSchedule,
     loadProjectSchedule: loadProjectSchedule,
     openProjectSchedule: openProjectSchedule,
-    renderPdfFirstPageThumbnail: renderPdfFirstPageThumbnail,
-    getJobNoteThumbnail: getJobNoteThumbnail,
     ready: function(){ return true; }
   };
 

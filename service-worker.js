@@ -28,16 +28,15 @@
 // matching scheme.
 //
 // Same cache-first app shell strategy as every other app in the family: a
-// small, fixed set of local files, no CDN calls once installed. (Through
-// v15 this app carried no pdf.js at all -- it never imports floor plans
-// itself, only reads the ones Site Measure/Projects already saved. v16
-// adds a LOCAL, vendored pdf.js/pdf.worker.min.js, precached below, purely
-// to render a small first-page thumbnail for the "Open job note" button --
-// see index.html's own getJobNoteThumbnail comment. Still no CDN call
-// either way; this is a new local dependency, not a new network one.)
-// Bump CACHE_NAME whenever index.html or any vendored asset changes, so
-// installed copies pick up the update instead of serving stale files
-// forever.
+// small, fixed set of local files, no CDN calls once installed (no pdf.js
+// import either -- this app never imports floor plans itself, only reads
+// the ones Site Measure/Projects already saved. v16 briefly added a local
+// pdf.js to render a job-note thumbnail on the "Open job note" button --
+// Andrew's own verdict afterward was "thumbnails were a fail, revert back
+// to the button" -- so v17 removes it again; this app is back to carrying
+// no pdf.js dependency at all). Bump CACHE_NAME whenever index.html or any
+// vendored asset changes, so installed copies pick up the update instead
+// of serving stale files forever.
 //
 // (v1, 2026-09-23: first release. Projects-root folder picker/reconnect
 // (same convention as Projects/Viewer), a cross-project sortable Overall
@@ -293,18 +292,11 @@
 // suite (run_all.sh) re-run clean, zero regressions. Does NOT touch
 // source.html, Install ITP, Manufacture ITP, or Projects in any way.)
 var ICON_VERSION = "v1";
-var CACHE_NAME = "utzline-scheduler-cache-v16";
+var CACHE_NAME = "utzline-scheduler-cache-v17";
 
 var PRECACHE_URLS = [
   "./",
   "./index.html",
-  // pdf.js (2026-09-24, job note thumbnail pilot -- see index.html's own
-  // comment above getJobNoteThumbnail) -- vendored locally like every other
-  // asset here, precached so it's available offline the same as
-  // everything else, not fetched from a CDN the way Site Measure/Viewer's
-  // own copy of this same library is.
-  "./pdf.min.js",
-  "./pdf.worker.min.js",
   "./manifest.json?v=" + ICON_VERSION,
   "./icons/icon-192.png?v=" + ICON_VERSION,
   "./icons/icon-512.png?v=" + ICON_VERSION,
