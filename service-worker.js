@@ -247,8 +247,48 @@
 // zoom/reset and marker-tap (opening the Set Schedule dialog) all still
 // work, and the full existing 9-file regression suite (run_all.sh) passes
 // unchanged.
+//
+// (v13, 2026-09-24: Andrew, verbatim: "on any scheduler, there needs to be
+// a open job note button for each joinery item. between delay and view on
+// plan." Ported UTZLINE Install ITP's own read-only "View job note"
+// feature (2026-09-22) into both this app's schedule tables -- the Overall
+// Schedule and the per-project Schedule -- since both already share the
+// same scheduleRowCells()/wireRowActions() row-building code, so this
+// needed no per-screen duplication. A job note is exclusively a PDF
+// attachment (site instructions, a delivery docket, etc) -- there is no
+// text body -- and this app only ever reads it; adding one only ever
+// happens from Site Measure or the Viewer. Content lives in a per-item
+// folder, <ProjectRoot>/Project Saves/Job Notes/<key>/ (key =
+// joineryItemPageKey(level, room, joineryId), the same identity triple
+// findJoineryStatus already uses), holding every PDF ever added, oldest
+// never deleted; jobNoteSortKey (ported from UTZLINE Projects' own
+// listJobNotesForItem) finds the "yyyy-mm-dd hh-mm-ss" stamp wherever it
+// sits in the filename so both the old (prefix) and new (suffix) naming
+// formats still sort newest-first.
+//
+// A new "Open job note" button leads the row-actions cell, right before
+// "View on plan" (i.e. directly after the Delay column, per Andrew's
+// "between delay and view on plan") -- but ONLY rendered for a row whose
+// item actually has one, gated on the `jobNote` flag buildEnrichedRows()
+// now also pulls off the very same joinery-status.json record
+// findJoineryStatus() already fetches (no extra file read needed for the
+// flag itself). This avoids a dead-end "no notes yet" dialog appearing on
+// every single row, the same call already made in Install ITP/Projects.
+// Clicking it opens a small dialog (reusing this app's existing
+// .modal-backdrop/.modal), lists every PDF newest-first, and an "Open"
+// button per row does getFile() -> an object URL -> window.open() in a new
+// tab, revoking the URL after 60s.
+//
+// Verified with a seeded fake Projects-root folder (Playwright): a real
+// PDF placed in an item's Job Notes folder plus jobNote:true in
+// joinery-status.json shows the button on both the Overall Schedule and a
+// per-project Schedule row for that item, opens the dialog, lists the PDF,
+// and "Open" launches it in a new tab; a second item with no job note
+// shows no button at all on either screen. Full existing 9-file regression
+// suite (run_all.sh) re-run clean, zero regressions. Does NOT touch
+// source.html, Install ITP, Manufacture ITP, or Projects in any way.)
 var ICON_VERSION = "v1";
-var CACHE_NAME = "utzline-scheduler-cache-v12";
+var CACHE_NAME = "utzline-scheduler-cache-v13";
 
 var PRECACHE_URLS = [
   "./",
