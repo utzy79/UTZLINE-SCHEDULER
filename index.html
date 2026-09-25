@@ -278,6 +278,47 @@
   .list-item .chev{ color: var(--muted2); }
   .empty-note{ color: var(--muted); font-size: 14px; padding: 18px 4px; text-align: center; }
   .section-title{ font-size: 15px; margin: 0 0 8px; }
+
+  /* ---- Joinery Item page (2026-09-24, Round 3 of the Joinery Item page
+     overhaul) -- Andrew, verbatim: "in both scheduler and machine
+     sheduler, all this information needs to be accessible also. (mimic
+     the joinery status page above)." Read-only port of UTZLINE Projects'
+     own Joinery Item page -- same card layout and CSS classes, ported
+     verbatim where the class names are shared (.doc-row, .rework-item*,
+     .overlay-snapshot*), so a screenshot of either app's page looks like
+     the same feature family. No "Edit item" here, no edit history, no
+     inline rework photos (see UTZLINE Projects' own v22 for why) -- this
+     app never writes joinery-item data at all, it only reads what every
+     other app in the family has already saved. */
+  .meta-grid{ display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 14px; }
+  .meta-grid dt{ color: var(--muted); }
+  .meta-grid dd{ margin: 0; }
+  .doc-row{
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 8px 0; border-top: 1px solid var(--border);
+  }
+  .doc-row:first-child{ border-top: none; }
+  .doc-row-name{ font-size: 13px; }
+  .doc-row-sub{ font-size: 12px; color: var(--muted); }
+  .rework-item{ padding: 10px 0; border-top: 1px solid var(--border); }
+  .rework-item:first-child{ border-top: none; }
+  .rework-item-head{ display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 13px; }
+  .rework-item-cabinet{ font-weight: 600; }
+  .rework-item-date{ font-size: 12px; color: var(--muted); }
+  .rework-item-text{ font-size: 13px; margin: 6px 0 0; white-space: pre-wrap; }
+  .rework-item-status{ font-size: 12px; margin-top: 6px; color: var(--muted); }
+  .rework-item-status.received{ color: var(--accent); }
+  .overlay-snapshot-img{
+    display: block; width: 100%; max-height: 420px; object-fit: contain;
+    border-radius: 8px; border: 1px solid var(--border); background: #0c1a20;
+  }
+  .overlay-snapshot-caption{ margin-top: 8px; }
+  .delivery-loc-row{ display: flex; align-items: center; gap: 12px; }
+  .delivery-loc-thumb-img{
+    width: 64px; height: 64px; flex: 0 0 auto; border-radius: 6px;
+    border: 1px solid var(--border); object-fit: cover; display: block;
+  }
+
   .hero-card{
     background: linear-gradient(135deg, var(--accent-soft), var(--panel));
     border: 1px solid var(--border);
@@ -659,6 +700,54 @@
       </table>
       <div class="empty-note" id="projEmpty" hidden>No items match these filters.</div>
       <div class="empty-note" id="projEmptyAll" hidden>No joinery items in this project yet.</div>
+    </div>
+  </section>
+
+  <!-- ---- Joinery item page (2026-09-24, Round 3 of the Joinery Item page
+       overhaul) -- read-only port of UTZLINE Projects' own Joinery Item
+       page. Andrew, verbatim: "in both scheduler and machine sheduler,
+       all this information needs to be accessible also. (mimic the
+       joinery status page above)." Additive alongside the existing "Open
+       job note" button (see scheduleRowCells's own row-actions cell) --
+       this is a fuller detail page, not a replacement for it. No "Edit
+       item"/"Edit history" here (this app never writes joinery-item data
+       at all) and no pin-drop click-to-jump on the Delivery location card
+       (see this screen's own JS wiring below for why). ---- -->
+  <section id="screenJoineryItem" class="screen">
+    <div class="row backrow">
+      <button class="btn secondary sm" id="backFromJoineryItemBtn">&larr; Back</button>
+      <h1 id="joineryItemTitle" style="margin:0;">Joinery item</h1>
+    </div>
+    <div class="card">
+      <dl class="meta-grid" id="joineryItemMetaGrid"></dl>
+      <div class="row" style="margin-top:14px;">
+        <button class="btn secondary sm" id="jiViewOnPlanBtn">View on plan</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2 class="section-title">Site Measure overlays</h2>
+      <div id="itemOverlaysList"></div>
+    </div>
+    <div class="card">
+      <h2 class="section-title">Shop drawings</h2>
+      <div id="itemShopDrawingsList"></div>
+    </div>
+    <div class="card">
+      <h2 class="section-title">Job notes</h2>
+      <div id="itemJobNotesList"></div>
+    </div>
+    <div class="card">
+      <h2 class="section-title">ITPs</h2>
+      <div id="itemItpList"></div>
+    </div>
+    <div class="card">
+      <h2 class="section-title">Rework</h2>
+      <div id="itemReworkPdfRow"></div>
+      <div id="itemReworkList"></div>
+    </div>
+    <div class="card">
+      <h2 class="section-title">Delivery location</h2>
+      <div id="itemDeliveryLocation"></div>
     </div>
   </section>
 
@@ -2754,13 +2843,22 @@
       // findJoineryStatus already fetched) -- no dead-end "no notes"
       // dialog on every single row, same call UTZLINE Projects made.
       "<td class=\"row-actions\">" +
+      // "Open item" leads the row-actions cell (2026-09-24, Round 3) --
+      // additive alongside "Open job note", not a replacement for it: this
+      // one full item detail page and that one dedicated notes dialog
+      // serve different quick-glance vs. deep-dive needs.
+      "<button type=\"button\" class=\"btn secondary sm open-item-btn\">Open item</button>" +
       (row.jobNote ? "<button type=\"button\" class=\"btn secondary sm jobnote-btn\">Open job note</button>" : "") +
       "<button type=\"button\" class=\"btn secondary sm view-plan-btn\">View on plan</button><button type=\"button\" class=\"btn secondary sm edit-sched-btn\">Edit schedule</button></td>";
   }
   function wireRowActions(tr, row, returnScreen){
+    var openItemBtn = tr.querySelector(".open-item-btn");
     var jobNoteBtn = tr.querySelector(".jobnote-btn");
     var viewBtn = tr.querySelector(".view-plan-btn");
     var editBtn = tr.querySelector(".edit-sched-btn");
+    openItemBtn.addEventListener("click", function(){
+      openJoineryItemPage(row, returnScreen);
+    });
     if (jobNoteBtn){
       jobNoteBtn.addEventListener("click", function(){
         openJobNoteViewDialog(row.projectHandle, row.level, row.room, row.joineryId);
@@ -2836,6 +2934,475 @@
       jobNoteListEl.innerHTML = "<p class=\"jobnote-empty\">Couldn't load job notes -- try again.</p>";
     });
   }
+
+  /* ============================== Joinery item page (2026-09-24, Round 3) ==============================
+     Read-only port of UTZLINE Projects' own Joinery Item page (see this
+     screen's own HTML comment above). Everything below is either copied
+     verbatim from UTZLINE Projects (the generic directory-walk helpers and
+     every reader function -- they need no changes at all, since they only
+     ever take a plain projectHandle + {level,room,joineryId} shape, which
+     this app's own already-built `row` objects satisfy directly) or
+     deliberately simplified for this read-only app (no Edit item/Edit
+     history, no rework-entry highlight-and-scroll -- there's no Rework
+     Register here to click a rework FROM -- and no interactive pin-drop
+     jump on the Delivery location card, just a static snapshot). */
+
+  // Every file (optionally filtered) directly inside a directory handle,
+  // sorted newest-name-first (every filename convention in this family
+  // embeds a sortable timestamp, so a plain reverse string sort is already
+  // chronological).
+  function listFilesInDir(dirHandle, testFn){
+    if (!dirHandle || typeof dirHandle.values !== "function") return Promise.resolve([]);
+    var out = [];
+    var iter = dirHandle.values();
+    function step(){
+      return iter.next().then(function(res){
+        if (res.done) return out;
+        if (res.value && res.value.kind === "file" && (!testFn || testFn(res.value.name))) out.push({ fileName: res.value.name, handle: res.value });
+        return step();
+      });
+    }
+    return step().then(function(list){
+      list.sort(function(a, b){ return b.fileName.localeCompare(a.fileName); });
+      return list;
+    });
+  }
+  function everySubdir(dirHandle){
+    if (!dirHandle || typeof dirHandle.values !== "function") return Promise.resolve([]);
+    var out = [];
+    var iter = dirHandle.values();
+    function step(){
+      return iter.next().then(function(res){
+        if (res.done) return out;
+        if (res.value && res.value.kind === "directory") out.push(res.value);
+        return step();
+      });
+    }
+    return step();
+  }
+
+  /* ---- Shop drawings (mirrors UTZLINE Projects' own getShopDrawingsDirForItem/
+     listShopDrawingRevisions/listShopDrawings) -- one entry per independent
+     drawing, each with its own revisions (oldest first). */
+  function getShopDrawingsDirForItem(projectHandle, key){
+    return projectHandle.getDirectoryHandle(projectSavesDirName(), { create: false }).then(function(psH){
+      return psH.getDirectoryHandle("Shop Drawings", { create: false });
+    }).then(function(sdH){
+      return sdH.getDirectoryHandle(key, { create: false });
+    });
+  }
+  function parseShopDrawingRevisionFileName(fileName){
+    var m = /^REV (\d+) - /.exec(fileName) || /^Rev([A-Z]+) - /.exec(fileName);
+    var revLabel = "REV ?";
+    if (m) revLabel = (/^\d+$/.test(m[1]) ? "REV " + m[1] : "Rev" + m[1]);
+    var afterRev = m ? fileName.slice(m[0].length) : fileName;
+    var idx = afterRev.indexOf(" - ");
+    var displayName = idx >= 0 ? afterRev.slice(idx + 3) : afterRev;
+    return { revLabel: revLabel, displayName: displayName };
+  }
+  function revLabelValue(revLabel){
+    var m = /^REV (\d+)$/.exec(revLabel || "");
+    if (m) return parseInt(m[1], 10);
+    var legacy = /^Rev([A-Z]+)$/.exec(revLabel || "");
+    if (legacy){
+      var letters = legacy[1], n = 0;
+      for (var i = 0; i < letters.length; i++){ n = n * 26 + (letters.charCodeAt(i) - 64); }
+      return n - 1000000;
+    }
+    return -1;
+  }
+  function listShopDrawingsForItem(projectHandle, key){
+    return getShopDrawingsDirForItem(projectHandle, key).then(function(dirH){
+      return everySubdir(dirH).then(function(groupHandles){
+        return Promise.all(groupHandles.map(function(groupH){
+          return listFilesInDir(groupH, function(name){ return /\.pdf$/i.test(name); }).then(function(files){
+            var revisions = files.map(function(f){
+              var parsed = parseShopDrawingRevisionFileName(f.fileName);
+              return { fileName: f.fileName, handle: f.handle, revLabel: parsed.revLabel, displayName: parsed.displayName };
+            });
+            revisions.sort(function(a, b){ return revLabelValue(a.revLabel) - revLabelValue(b.revLabel); });
+            return { drawingId: groupH.name, revisions: revisions };
+          });
+        }));
+      });
+    }, function(){ return []; }).then(function(groups){
+      groups = (groups || []).filter(function(g){ return g.revisions.length > 0; });
+      groups.sort(function(a, b){ return b.drawingId.localeCompare(a.drawingId); });
+      return groups;
+    });
+  }
+
+  /* ---- Site Measure overlays (mirrors UTZLINE Projects' own
+     getJoineryOverlaysDir/parseJoineryOverlayFileName). Read-only, same as
+     every other card here -- this app never writes an overlay, only Site
+     Measure does. "This item's measured overlay" is treated as one
+     item-wide thing (the single most recent Save across every user who's
+     ever measured it), same as UTZLINE Projects' own Joinery Item page. */
+  function getSiteMeasuresDirForItem(projectHandle, key){
+    return projectHandle.getDirectoryHandle(projectSavesDirName(), { create: false }).then(function(psH){
+      return psH.getDirectoryHandle("Site Measures", { create: false });
+    }).then(function(smH){
+      return smH.getDirectoryHandle(key, { create: false });
+    });
+  }
+  function getJoineryOverlaysDirForItem(projectHandle, key){
+    return getSiteMeasuresDirForItem(projectHandle, key).then(function(dirH){
+      return dirH.getDirectoryHandle("overlays", { create: false });
+    });
+  }
+  function parseJoineryOverlayFileName(fileName){
+    var base = fileName.replace(/\.json$/i, "");
+    var idx = base.lastIndexOf(" - ");
+    if (idx < 0) return { user: base, stamp: "" };
+    return { user: base.slice(0, idx), stamp: base.slice(idx + 3) };
+  }
+  function formatOverlayStamp(stamp){
+    var m = /^(\d{4}-\d{2}-\d{2}) (\d{2})-(\d{2})-(\d{2})$/.exec(stamp || "");
+    if (!m) return stamp || "";
+    return m[1] + " " + m[2] + ":" + m[3];
+  }
+  function listJoineryOverlaysForItem(projectHandle, key){
+    return getJoineryOverlaysDirForItem(projectHandle, key).then(function(dirH){
+      return listFilesInDir(dirH, function(name){ return /\.json$/i.test(name); });
+    }, function(){ return []; }).then(function(list){
+      var parsed = list.map(function(f){
+        var p = parseJoineryOverlayFileName(f.fileName);
+        return { fileName: f.fileName, handle: f.handle, user: p.user, stamp: p.stamp };
+      });
+      parsed.sort(function(a, b){ return b.stamp.localeCompare(a.stamp); });
+      return parsed;
+    });
+  }
+  function readLatestJoineryOverlayForItem(projectHandle, key){
+    return listJoineryOverlaysForItem(projectHandle, key).then(function(list){
+      if (!list.length) return null;
+      var latest = list[0];
+      return latest.handle.getFile().then(function(file){ return file.text(); }).then(function(text){
+        var data = null;
+        try{ data = JSON.parse(text); }catch(e){}
+        return {
+          user: latest.user, stamp: latest.stamp, otherCount: list.length - 1,
+          snapshotDataUrl: (data && data.overlaySnapshotDataURL) || null
+        };
+      }, function(){
+        return { user: latest.user, stamp: latest.stamp, otherCount: list.length - 1, snapshotDataUrl: null };
+      });
+    }, function(){ return null; });
+  }
+
+  /* ---- Manufacture + Install + Delivery ITP (mirrors each ITP app's own
+     flat-project folder convention -- see UTZLINE Projects' own comment on
+     its identically-named readers). UTZLINE Projects only ever creates
+     flat projects, and this app is read-only against these branches
+     regardless of shape, so the flat-only lookup below is correct for
+     every project this app can open. */
+  function itpChecklistFileNameForItem(row){
+    return sanitizeFileBase(row.level) + " - " + sanitizeFileBase(row.room) + " - " + sanitizeFileBase(row.joineryId) + ".json";
+  }
+  function itpPdfBaseNameForItem(row){
+    return sanitizeFileBase(row.level) + " - " + sanitizeFileBase(row.room) + " - " + sanitizeFileBase(row.joineryId);
+  }
+  function readItpChecklistRaw(projectHandle, appBranch, row){
+    return projectHandle.getDirectoryHandle(projectSavesDirName(), { create: false }).then(function(psH){
+      return psH.getDirectoryHandle("UTZLINE ITP", { create: false });
+    }).then(function(branchH){
+      return branchH.getDirectoryHandle(appBranch, { create: false });
+    }).then(function(dirH){
+      return dirH.getFileHandle(itpChecklistFileNameForItem(row), { create: false });
+    }).then(function(fh){
+      return fh.getFile();
+    }).then(function(file){ return file.text(); }).then(function(text){
+      try{ return JSON.parse(text); }catch(e){ return null; }
+    }, function(){ return null; });
+  }
+  function readItpChecklistSummary(projectHandle, appBranch, roleKeys, row){
+    return readItpChecklistRaw(projectHandle, appBranch, row).then(function(data){
+      if (!data) return { started: false };
+      var total = Array.isArray(data.rows) ? data.rows.length : 0;
+      var answered = Array.isArray(data.rows) ? data.rows.filter(function(r){ return r && r.status; }).length : 0;
+      var hasNo = Array.isArray(data.rows) && data.rows.some(function(r){ return r && r.status === "no"; });
+      var bothSigned = !!(data.signoff && roleKeys.every(function(role){ return data.signoff[role] && data.signoff[role].sig; }));
+      return { started: true, answered: answered, total: total, hasNo: hasNo, signed: bothSigned && !hasNo };
+    });
+  }
+  function listItpPdfsForItem(projectHandle, appBranch, row){
+    return projectHandle.getDirectoryHandle("PDF Files", { create: false }).then(function(pfH){
+      return pfH.getDirectoryHandle("UTZLINE ITP", { create: false });
+    }).then(function(branchH){
+      return branchH.getDirectoryHandle(appBranch, { create: false });
+    }).then(function(dirH){
+      var prefix = itpPdfBaseNameForItem(row) + "_";
+      return listFilesInDir(dirH, function(name){ return name.indexOf(prefix) === 0 && /\.pdf$/i.test(name); });
+    }, function(){ return []; });
+  }
+  // Install ITP's own always-current cumulative rework PDF for this item
+  // (2026-09-24) -- see UTZLINE Projects' own readReworkPdfForItem comment
+  // for the full design: one fixed, un-timestamped filename per item,
+  // overwritten in place, removed entirely once the last rework entry is
+  // deleted. Resolves to null both for "no rework logged yet" and "every
+  // entry since deleted", so the caller can tell that apart from a read
+  // failure the same way every other reader here does.
+  function readReworkPdfForItem(projectHandle, row){
+    return projectHandle.getDirectoryHandle("PDF Files", { create: false }).then(function(pfH){
+      return pfH.getDirectoryHandle("UTZLINE ITP", { create: false });
+    }).then(function(branchH){
+      return branchH.getDirectoryHandle("Install ITP Rework", { create: false });
+    }).then(function(dirH){
+      var fileName = itpPdfBaseNameForItem(row) + ".pdf";
+      return dirH.getFileHandle(fileName, { create: false }).then(function(fh){
+        return { fileName: fileName, handle: fh };
+      });
+    }, function(){ return null; }).catch(function(){ return null; });
+  }
+  // Install ITP's own rework-tracker file for this item (read-only). Lives
+  // in the exact same flat "Project Saves/UTZLINE ITP/<branch>/<Level> -
+  // <Room> - <Code>.json" shape as every other ITP checklist, just under
+  // its own "Install ITP Rework" branch. Resolves to an empty array (not a
+  // rejection) for "no rework logged yet", the normal, common case.
+  function readInstallReworkForItem(projectHandle, row){
+    return readItpChecklistRaw(projectHandle, "Install ITP Rework", row).then(function(data){
+      return (data && Array.isArray(data.reworks)) ? data.reworks : [];
+    });
+  }
+  // "Pin drop location... snapshot taken from the delivery itp" -- Delivery
+  // ITP's own checklist JSON carries `deliveryLocationPin` and
+  // `locationSnapshot` once its own "Add location snapshot" has been used
+  // for this item. This app shows the snapshot as a static thumbnail only
+  // (see renderJoineryItemLinkedSections below) -- no click-to-jump-to-pin
+  // interactivity, since this app's own openPlanCanvasForLevel has no
+  // exact-point-centering mode to reuse for it; "View on plan" above
+  // already gets you to the right level.
+  function readDeliveryLocationForItem(projectHandle, row){
+    return readItpChecklistRaw(projectHandle, "Delivery ITP", row).then(function(data){
+      if (!data) return { pin: null, snapshot: null };
+      var pin = (data.deliveryLocationPin && typeof data.deliveryLocationPin.x === "number" && typeof data.deliveryLocationPin.y === "number") ? data.deliveryLocationPin : null;
+      var snapshot = (data.locationSnapshot && data.locationSnapshot.dataUrl) ? data.locationSnapshot : null;
+      return { pin: pin, snapshot: snapshot };
+    });
+  }
+
+  function openLinkedFileHandle(handle){
+    handle.getFile().then(function(file){
+      var url = URL.createObjectURL(file);
+      window.open(url, "_blank");
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 60000);
+    }).catch(function(err){
+      console.error("Open failed:", err);
+      showToast("Couldn't open that file -- try again.");
+    });
+  }
+  function docRow(nameHtml, subText, handle){
+    var row = document.createElement("div");
+    row.className = "doc-row";
+    var left = document.createElement("div");
+    left.innerHTML = "<div class=\"doc-row-name\">" + nameHtml + "</div>" + (subText ? "<div class=\"doc-row-sub\">" + escapeHtml(subText) + "</div>" : "");
+    row.appendChild(left);
+    var openBtn = document.createElement("button");
+    openBtn.type = "button"; openBtn.className = "btn secondary sm";
+    openBtn.textContent = "Open";
+    openBtn.addEventListener("click", function(e){ e.stopPropagation(); openLinkedFileHandle(handle); });
+    row.appendChild(openBtn);
+    return row;
+  }
+
+  var joineryItemTitle = document.getElementById("joineryItemTitle");
+  var joineryItemMetaGrid = document.getElementById("joineryItemMetaGrid");
+  var itemOverlaysList = document.getElementById("itemOverlaysList");
+  var itemShopDrawingsList = document.getElementById("itemShopDrawingsList");
+  var itemJobNotesList = document.getElementById("itemJobNotesList");
+  var itemItpList = document.getElementById("itemItpList");
+  var itemReworkPdfRow = document.getElementById("itemReworkPdfRow");
+  var itemReworkList = document.getElementById("itemReworkList");
+  var itemDeliveryLocation = document.getElementById("itemDeliveryLocation");
+  var backFromJoineryItemBtn = document.getElementById("backFromJoineryItemBtn");
+  var jiViewOnPlanBtn = document.getElementById("jiViewOnPlanBtn");
+  var activeJoineryItemRow = null;
+  var joineryItemReturnScreen = "home";
+
+  // Scheduler's own row shape already carries everything the meta-grid
+  // needs, computed at table-render time by buildEnrichedRows -- no
+  // re-fetch of status/schedule here the way UTZLINE Projects' own
+  // openJoineryItemPage does, since this page is opened FROM a table row
+  // that already has it all.
+  function renderJoineryItemMetaGrid(row){
+    joineryItemMetaGrid.innerHTML =
+      "<dt>Level</dt><dd>" + escapeHtml(row.level) + "</dd>" +
+      "<dt>Room</dt><dd>" + escapeHtml(row.room) + "</dd>" +
+      "<dt>Description</dt><dd>" + escapeHtml(row.description || "(none)") + "</dd>" +
+      "<dt>Work order #</dt><dd>" + (row.workOrderNo ? escapeHtml(row.workOrderNo) : "—") + "</dd>" +
+      "<dt>Status</dt><dd>" + statusLabelHtml(row.statusKey) + "</dd>" +
+      "<dt>Scheduled delivery</dt><dd>" + (row.requiredDeliveryDate ? escapeHtml(formatDateDisplay(row.requiredDeliveryDate)) : "—") + "</dd>" +
+      "<dt>Actual delivery</dt><dd>" + (row.actualDeliveredAt ? escapeHtml(formatHistoryDateOnly(row.actualDeliveredAt)) : "—") + "</dd>" +
+      "<dt>Manufacture start</dt><dd>" + (row.manufactureStartDate ? escapeHtml(formatDateDisplay(row.manufactureStartDate)) : "—") + "</dd>" +
+      "<dt>Delay</dt><dd><span class=\"delay-pill delay-" + row.delayKey + "\">" + escapeHtml(row.delayLabel) + "</span></dd>";
+  }
+
+  function renderJoineryItemLinkedSections(row){
+    var key = joineryItemPageKey(row.level, row.room, row.joineryId);
+    itemOverlaysList.innerHTML = "<p class=\"sub\" style=\"margin:0;\">Loading…</p>";
+    itemShopDrawingsList.innerHTML = "<p class=\"sub\" style=\"margin:0;\">Loading…</p>";
+    itemJobNotesList.innerHTML = "<p class=\"sub\" style=\"margin:0;\">Loading…</p>";
+    itemItpList.innerHTML = "<p class=\"sub\" style=\"margin:0;\">Loading…</p>";
+    itemReworkPdfRow.innerHTML = "";
+    itemReworkList.innerHTML = "<p class=\"sub\" style=\"margin:0;\">Loading…</p>";
+    itemDeliveryLocation.innerHTML = "<p class=\"sub\" style=\"margin:0;\">Loading…</p>";
+
+    readLatestJoineryOverlayForItem(row.projectHandle, key).then(function(overlay){
+      if (activeJoineryItemRow !== row) return; // navigated away before this resolved
+      if (!overlay){
+        itemOverlaysList.innerHTML = "<p class=\"sub\" style=\"margin:0;\">No Site Measure overlay saved yet for this item.</p>";
+        return;
+      }
+      var caption = escapeHtml(overlay.user || "Unnamed") + " — " + escapeHtml(formatOverlayStamp(overlay.stamp));
+      if (overlay.otherCount > 0){
+        caption += " · " + overlay.otherCount + (overlay.otherCount === 1 ? " earlier save" : " earlier saves") + " (open Site Measure to see every layer)";
+      }
+      itemOverlaysList.innerHTML =
+        (overlay.snapshotDataUrl
+          ? "<img class=\"overlay-snapshot-img\" src=\"" + overlay.snapshotDataUrl + "\" alt=\"Site Measure overlay for this item\">"
+          : "<p class=\"sub\" style=\"margin:0;\">Saved before overlay previews existed — open Site Measure to view it.</p>") +
+        "<p class=\"sub overlay-snapshot-caption\">" + caption + "</p>";
+    }).catch(function(err){
+      console.error("Reading Site Measure overlay failed:", err);
+      itemOverlaysList.innerHTML = "<p class=\"sub\" style=\"margin:0;\">Couldn't load the Site Measure overlay.</p>";
+    });
+
+    listShopDrawingsForItem(row.projectHandle, key).then(function(groups){
+      if (activeJoineryItemRow !== row) return;
+      itemShopDrawingsList.innerHTML = "";
+      if (!groups.length){
+        itemShopDrawingsList.innerHTML = "<p class=\"sub\" style=\"margin:0;\">No shop drawings yet for this item.</p>";
+        return;
+      }
+      groups.forEach(function(g){
+        var latest = g.revisions[g.revisions.length - 1];
+        itemShopDrawingsList.appendChild(docRow(escapeHtml(latest.displayName), latest.revLabel + " · " + g.revisions.length + (g.revisions.length === 1 ? " revision" : " revisions"), latest.handle));
+      });
+    }).catch(function(err){
+      console.error("Listing shop drawings failed:", err);
+      itemShopDrawingsList.innerHTML = "<p class=\"sub\" style=\"margin:0;\">Couldn't load shop drawings.</p>";
+    });
+
+    listJobNotes(row.projectHandle, key).then(function(notes){
+      if (activeJoineryItemRow !== row) return;
+      itemJobNotesList.innerHTML = "";
+      if (!notes.length){
+        itemJobNotesList.innerHTML = "<p class=\"sub\" style=\"margin:0;\">No job notes yet for this item.</p>";
+        return;
+      }
+      notes.forEach(function(n){
+        itemJobNotesList.appendChild(docRow(escapeHtml(n.fileName), "", n.handle));
+      });
+    }).catch(function(err){
+      console.error("Listing job notes failed:", err);
+      itemJobNotesList.innerHTML = "<p class=\"sub\" style=\"margin:0;\">Couldn't load job notes.</p>";
+    });
+
+    var itpApps = [
+      { branch: "Manufacture ITP", roles: ["builder", "supervisor"], name: "Manufacture ITP" },
+      { branch: "Install ITP", roles: ["installer", "supervisor"], name: "Install ITP" },
+      { branch: "Delivery ITP", roles: ["driver", "supervisor"], name: "Delivery ITP" }
+    ];
+    Promise.all(itpApps.map(function(app){
+      return Promise.all([
+        readItpChecklistSummary(row.projectHandle, app.branch, app.roles, row),
+        listItpPdfsForItem(row.projectHandle, app.branch, row)
+      ]).then(function(res){ return { app: app, summary: res[0], pdfs: res[1] }; });
+    })).then(function(results){
+      if (activeJoineryItemRow !== row) return;
+      itemItpList.innerHTML = "";
+      results.forEach(function(r){
+        var summaryText;
+        if (!r.summary.started) summaryText = "Not started";
+        else if (r.summary.signed) summaryText = "Signed off";
+        else if (r.summary.hasNo) summaryText = "In progress — a row is flagged No";
+        else summaryText = r.summary.answered + " of " + r.summary.total + " answered";
+        var header = document.createElement("div");
+        header.className = "doc-row";
+        header.innerHTML = "<div class=\"doc-row-name\">" + escapeHtml(r.app.name) + "</div><div class=\"doc-row-sub\">" + escapeHtml(summaryText) + "</div>";
+        itemItpList.appendChild(header);
+        r.pdfs.forEach(function(p){
+          itemItpList.appendChild(docRow(escapeHtml(p.fileName), "", p.handle));
+        });
+      });
+    }).catch(function(err){
+      console.error("Listing ITP checklists failed:", err);
+      itemItpList.innerHTML = "<p class=\"sub\" style=\"margin:0;\">Couldn't load ITP checklists.</p>";
+    });
+
+    readReworkPdfForItem(row.projectHandle, row).then(function(pdf){
+      if (activeJoineryItemRow !== row) return;
+      if (!pdf) return;
+      itemReworkPdfRow.appendChild(docRow("Rework PDF", "Every rework entry logged for this item, with photos", pdf.handle));
+    }).catch(function(err){
+      console.error("Reading rework PDF failed:", err);
+    });
+    readInstallReworkForItem(row.projectHandle, row).then(function(reworks){
+      if (activeJoineryItemRow !== row) return;
+      if (!reworks.length){
+        itemReworkList.innerHTML = "<p class=\"sub\" style=\"margin:0;\">No rework logged for this item.</p>";
+        return;
+      }
+      itemReworkList.innerHTML = "";
+      reworks.forEach(function(r){
+        var entryRow = document.createElement("div");
+        entryRow.className = "rework-item";
+        var cabinetText = r.cabinetNumber ? ("Cabinet " + r.cabinetNumber) : "No cabinet number";
+        var createdText = formatHistoryDate(r.createdAt) + (r.createdBy ? " — " + escapeHtml(r.createdBy) : "");
+        var statusText = r.received
+          ? "Received back on site" + (r.receivedDate ? " (" + escapeHtml(r.receivedDate) + ")" : "")
+          : "Not yet received back on site";
+        entryRow.innerHTML =
+          "<div class=\"rework-item-head\"><span class=\"rework-item-cabinet\">" + escapeHtml(cabinetText) + "</span><span class=\"rework-item-date\">" + createdText + "</span></div>" +
+          (r.text ? "<p class=\"rework-item-text\">" + escapeHtml(r.text) + "</p>" : "") +
+          "<div class=\"rework-item-status" + (r.received ? " received" : "") + "\">" + escapeHtml(statusText) + "</div>";
+        itemReworkList.appendChild(entryRow);
+      });
+    }).catch(function(err){
+      console.error("Reading rework tracker failed:", err);
+      itemReworkList.innerHTML = "<p class=\"sub\" style=\"margin:0;\">Couldn't load rework tracking.</p>";
+    });
+
+    // Simplified Delivery location card (2026-09-24, Round 3): a static
+    // snapshot thumbnail + descriptive text only -- no click-to-jump pin,
+    // see readDeliveryLocationForItem's own comment for why. "View on
+    // plan" above already gets a visitor to the right level.
+    readDeliveryLocationForItem(row.projectHandle, row).then(function(loc){
+      if (activeJoineryItemRow !== row) return;
+      if (!loc.pin){
+        itemDeliveryLocation.innerHTML = "<p class=\"sub\" style=\"margin:0;\">No delivery location pin recorded yet.</p>";
+        return;
+      }
+      var thumbHtml = loc.snapshot
+        ? "<img class=\"delivery-loc-thumb-img\" src=\"" + loc.snapshot.dataUrl + "\" alt=\"Delivery location snapshot\">"
+        : "";
+      itemDeliveryLocation.innerHTML =
+        "<div class=\"delivery-loc-row\">" + thumbHtml +
+        "<span class=\"sub\" style=\"margin:0;\">Delivery location pin recorded by Delivery ITP -- use “View on plan” above to see this item's level.</span></div>";
+    }).catch(function(err){
+      console.error("Reading delivery location failed:", err);
+      itemDeliveryLocation.innerHTML = "<p class=\"sub\" style=\"margin:0;\">Couldn't load the delivery location.</p>";
+    });
+  }
+
+  function openJoineryItemPage(row, returnScreen){
+    activeJoineryItemRow = row;
+    joineryItemReturnScreen = returnScreen || "home";
+    joineryItemTitle.textContent = row.joineryId ? row.joineryId : "(no ID)";
+    renderJoineryItemMetaGrid(row);
+    showScreen("joineryItem");
+    renderJoineryItemLinkedSections(row);
+  }
+  backFromJoineryItemBtn.addEventListener("click", function(){ showScreen(joineryItemReturnScreen); });
+  jiViewOnPlanBtn.addEventListener("click", function(){
+    if (!activeJoineryItemRow) return;
+    var row = activeJoineryItemRow;
+    // Returns to the underlying table (not back to this page) when backing
+    // out of the plan -- openPlanCanvasForLevel's own planReturnScreen only
+    // knows "overall"/"projectSchedule"/"home", same as every other
+    // View-on-plan button in this app.
+    openPlanCanvasForLevel(row.projectHandle, row.project, row.level, joineryItemReturnScreen);
+  });
 
   /* ============================== Overall Schedule screen ============================== */
   var overallTable = document.getElementById("overallTable");
@@ -3032,7 +3599,8 @@
     reconnect: document.getElementById("screenReconnect"),
     home: document.getElementById("screenHome"),
     overall: document.getElementById("screenOverall"),
-    projectSchedule: document.getElementById("screenProjectSchedule")
+    projectSchedule: document.getElementById("screenProjectSchedule"),
+    joineryItem: document.getElementById("screenJoineryItem")
   };
   function showScreen(name){
     Object.keys(screens).forEach(function(k){ screens[k].hidden = (k !== name); });
