@@ -291,8 +291,18 @@
 // shows no button at all on either screen. Full existing 9-file regression
 // suite (run_all.sh) re-run clean, zero regressions. Does NOT touch
 // source.html, Install ITP, Manufacture ITP, or Projects in any way.)
+// (v21, 2026-09-26, same day: Andrew, "now update the schedules," --
+// "View on plan" now zooms/centers on the specific item's own marker
+// (ported from UTZLINE Projects' openPlanCanvasForLevel(centerOnMarker))
+// instead of just fitting the whole level; the existing v20 sticky-column
+// treatment now has a real, working horizontal scrollbar (a
+// .screen{min-width:0} fix -- the table was overflowing the whole page
+// instead of its own .table-scroll wrapper) and is viewport-width-based,
+// not OS/UA-based (sticky only at/above 900px; a plain, fully-scrollable
+// table below it). No cache-strategy change; CACHE_NAME bumped. See the
+// README's v21 entry.)
 var ICON_VERSION = "v1";
-var CACHE_NAME = "utzline-scheduler-cache-v20";
+var CACHE_NAME = "utzline-scheduler-cache-v21";
 
 var PRECACHE_URLS = [
   "./",

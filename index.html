@@ -212,7 +212,18 @@
     justify-content: center;
     padding: 24px 16px 60px;
   }
-  .screen{ width: 100%; max-width: 980px; }
+  /* (2026-09-26) min-width: 0 overrides a flex item's default automatic
+     min-width, which is otherwise its own max-content size -- for
+     .screen.wide-table that meant .sched-table's forced min-width
+     propagated all the way up through .card and .screen, so .screen itself
+     grew wider than main's available space instead of .table-scroll ever
+     actually overflowing (the root cause behind Machine Schedule's own
+     identical "no way to scroll across on windows" report -- same layout
+     pattern here, same fix). With .screen properly shrinking to main's
+     width, .table-scroll's own overflow-x:auto becomes the genuine,
+     always-visible, native scrollbar, and applyStickyColumnOffsets' sticky
+     columns freeze relative to the right scrolling ancestor. */
+  .screen{ width: 100%; max-width: 980px; min-width: 0; }
   .screen[hidden]{ display: none; }
   .screen.narrow{ max-width: 640px; }
   /* Full-width table screens (2026-09-23): Andrew, verbatim -- "Where there
@@ -424,7 +435,8 @@
      axes; tapping a row's button must not fight the pan -- `pan-x pan-y`
      tells the browser the scroll is its job and the tap is ours. */
   .table-scroll{ overflow-x: auto; touch-action: pan-x pan-y; -webkit-overflow-scrolling: touch; }
-  /* ---- Frozen (sticky) identifying columns (v20, shared schema round §5) ----
+  /* ---- Frozen (sticky) identifying columns (v20, shared schema round §5;
+     made viewport-width-based 2026-09-26 -- see the note below) ----
        Every column up to and including Work order # stays pinned while the
        schedule-date block onward scrolls under it, inside the SAME
        .table-scroll wrapper this app already has (no new wrapper needed --
@@ -433,16 +445,28 @@
        content (Level/Room names, work order #s), so a fixed pixel offset
        would drift -- applyStickyColumnOffsets (JS, run after every render
        and on resize) measures the ACTUAL rendered header-cell widths and
-       writes each frozen cell's `left` as a cumulative offset, both classes
-       below just supply the position/background/edge styling. */
-  .sched-table th.sticky-col, .sched-table td.sticky-col{
-    position: sticky; z-index: 1; background: var(--panel);
-  }
-  .sched-table th.sticky-col{ z-index: 2; }
-  .sched-table tbody tr:hover td.sticky-col{ background: var(--panel2); }
-  .sched-table th.sticky-col-edge, .sched-table td.sticky-col-edge{
-    border-right: 2px solid var(--border);
-    box-shadow: 3px 0 6px -3px rgba(0,0,0,0.5);
+       writes each frozen cell's `left` as a cumulative offset regardless of
+       viewport size; the two classes below (now scoped to STICKY_MIN_WIDTH
+       and up) supply the position/background/edge styling that actually
+       makes those offsets do anything. Andrew, verbatim, same day as v20:
+       "can we remove the freeze on android as you cant use the schedule
+       now" -- asked directly whether this was Android/touch-specific; his
+       answer: "it will be an issue on any smaller screen (small laptop,
+       tablet, phone)." So this is a viewport-width breakpoint, never an
+       OS/UA check -- below it, every column just scrolls together in one
+       plain, fully-scrollable table (the JS above keeps running and
+       harmlessly keeps writing `left` offsets that do nothing while
+       position stays the default `static`). */
+  @media (min-width: 900px){
+    .sched-table th.sticky-col, .sched-table td.sticky-col{
+      position: sticky; z-index: 1; background: var(--panel);
+    }
+    .sched-table th.sticky-col{ z-index: 2; }
+    .sched-table tbody tr:hover td.sticky-col{ background: var(--panel2); }
+    .sched-table th.sticky-col-edge, .sched-table td.sticky-col-edge{
+      border-right: 2px solid var(--border);
+      box-shadow: 3px 0 6px -3px rgba(0,0,0,0.5);
+    }
   }
   /* Instant-paint refresh note (2026-09-25, sweep): shown while a table
      painted from its last-known device-local snapshot is being refreshed
@@ -3063,7 +3087,7 @@
       planRenderMarkers();
     }).catch(function(err){ console.warn("Plan marker delay colours couldn't be computed (markers stay grey):", err); });
   }
-  function openPlanCanvasForLevel(projectHandle, projectName, levelName, returnScreen){
+  function openPlanCanvasForLevel(projectHandle, projectName, levelName, returnScreen, centerOnMarker){
     planActiveProjectHandle = projectHandle;
     planActiveProjectName = projectName;
     planActiveLevelName = levelName;
@@ -3097,6 +3121,37 @@
       planRenderMarkers();
       requestAnimationFrame(function(){
         planFitToView();
+        // (2026-09-26) "View on plan" zoom-to-item -- ported verbatim from
+        // UTZLINE Projects' own openPlanCanvasForLevel(centerOnMarker),
+        // which Andrew confirmed is "the perfect zoom level" (NEXT_RUN_NOTES
+        // item 7). Same two accepted shapes as Projects: {room, joineryId}
+        // looks up that item's own roomlink marker; {x, y} centres on a raw
+        // world point directly. Only the two call sites tied to a specific
+        // joinery item pass this; the general level-picker "Open plan"
+        // button (no single item in view) omits it and keeps today's plain
+        // fit-to-view.
+        if (centerOnMarker){
+          var targetX = null, targetY = null;
+          if (typeof centerOnMarker.x === "number" && typeof centerOnMarker.y === "number"){
+            targetX = centerOnMarker.x;
+            targetY = centerOnMarker.y;
+          } else {
+            var marker = (planSaved.objects || []).filter(function(o){
+              return o.type === "roomlink" && o.roomName === centerOnMarker.room && o.joineryCode === centerOnMarker.joineryId;
+            })[0];
+            if (marker){ targetX = marker.x; targetY = marker.y; }
+          }
+          if (targetX !== null){
+            var w = planCanvasStageWrap.clientWidth, h = planCanvasStageWrap.clientHeight;
+            // Zoom in at least as close as a 1:1 pixel view so the target is
+            // easy to pick out, but never zoom back OUT past whatever
+            // fit-to-view already chose.
+            planView.scale = Math.max(planView.scale, 1);
+            planView.tx = w / 2 - targetX * planView.scale;
+            planView.ty = h / 2 - targetY * planView.scale;
+            planApplyTransform();
+          }
+        }
       });
       if (!level){
         showToast("No saved plan found for this level yet.");
@@ -3770,7 +3825,7 @@
       });
     }
     viewBtn.addEventListener("click", function(){
-      withHandle(function(h){ return openPlanCanvasForLevel(h, row.project, row.level, returnScreen); });
+      withHandle(function(h){ return openPlanCanvasForLevel(h, row.project, row.level, returnScreen, { room: row.room, joineryId: row.joineryId }); });
     });
     editBtn.addEventListener("click", function(){
       // The saved/cleared record is applied to the table rows in place by
@@ -4309,7 +4364,7 @@
     // out of the plan -- openPlanCanvasForLevel's own planReturnScreen only
     // knows "overall"/"projectSchedule"/"home", same as every other
     // View-on-plan button in this app.
-    openPlanCanvasForLevel(row.projectHandle, row.project, row.level, joineryItemReturnScreen);
+    openPlanCanvasForLevel(row.projectHandle, row.project, row.level, joineryItemReturnScreen, { room: row.room, joineryId: row.joineryId });
   });
 
   /* ============================== Overall Schedule screen ============================== */
